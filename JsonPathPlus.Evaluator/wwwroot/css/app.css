@@ -1,4 +1,5 @@
 /* ===== Reset & Base ===== */
+/* Deployment trigger: keep workflow path filter active for publish runs. */
 *, *::before, *::after {
     box-sizing: border-box;
     margin: 0;
