@@ -515,42 +515,6 @@
     </div>
 </div>
 
-@* ========== HISTORY PANEL ========== *@
-@if (showHistory)
-{
-    <div class="history-panel">
-        <div class="history-header">
-            <span>Evaluation History</span>
-            @if (historyEntries.Count > 0)
-            {
-                <button class="btn" @onclick="ClearHistoryAsync" title="Clear all history">
-                    <span>&#x1F5D1;</span> Clear
-                </button>
-            }
-        </div>
-        <div class="history-list">
-            @if (historyEntries.Count == 0)
-            {
-                <div class="history-empty">No history yet. Evaluate some expressions to see them here.</div>
-            }
-            else
-            {
-                @foreach (var entry in historyEntries)
-                {
-                    <div class="history-item" @onclick="() => RestoreFromHistory(entry)" title="Restore this evaluation">
-                        <div class="history-item-path">@entry.Path</div>
-                        <div class="history-item-meta">
-                            <span class="history-item-count">@entry.MatchCount match@(entry.MatchCount == 1 ? "" : "es")</span>
-                            <span class="history-item-time">@entry.Timestamp</span>
-                        </div>
-                        <div class="history-item-preview">@entry.ShortJson</div>
-                    </div>
-                }
-            }
-        </div>
-    </div>
-}
-
 @* ========== PATH INPUT BAR ========== *@
 <div class="path-input-bar">
     <label for="pathInput">JSONPath</label>
@@ -576,7 +540,42 @@
 </div>
 
 @* ========== MAIN PANELS ========== *@
-<div class="panels-container">
+<div class="panels-container @(showHistory ? "has-history" : "")">
+    @* History Sidebar *@
+    @if (showHistory)
+    {
+        <div class="panel history-sidebar">
+            <div class="panel-header">
+                <span>History</span>
+                <button class="btn" @onclick="ClearHistoryAsync" title="Clear all history">
+                    <span>&#x1F5D1;</span> Clear
+                </button>
+            </div>
+            <div class="panel-body">
+                <div class="history-list">
+                    @if (historyEntries.Count == 0)
+                    {
+                        <div class="history-empty">No history yet. Evaluate some expressions to see them here.</div>
+                    }
+                    else
+                    {
+                        @foreach (var entry in historyEntries)
+                        {
+                            <div class="history-item" @onclick="() => RestoreFromHistory(entry)" title="Restore this evaluation">
+                                <div class="history-item-path">@entry.Path</div>
+                                <div class="history-item-meta">
+                                    <span class="history-item-count">@entry.MatchCount match@(entry.MatchCount == 1 ? "" : "es")</span>
+                                    <span class="history-item-time">@entry.Timestamp</span>
+                                </div>
+                                <div class="history-item-preview">@entry.ShortJson</div>
+                            </div>
+                        }
+                    }
+                </div>
+            </div>
+        </div>
+    }
+
     @* Left: JSON Document *@
     <div class="panel document-panel">
         <div class="panel-header">
