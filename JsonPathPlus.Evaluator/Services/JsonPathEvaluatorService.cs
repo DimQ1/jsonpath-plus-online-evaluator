@@ -1,11 +1,12 @@
 using System;
+using System.Buffers;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using System.Text.RegularExpressions;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 
 namespace JsonPathPlus.Evaluator.Services;
@@ -16,19 +17,29 @@ namespace JsonPathPlus.Evaluator.Services;
 /// </summary>
 public class JsonPathEvaluatorService
 {
+    private const int MaxSinglePreviewBytes = 64 * 1024;
+    private const int MaxAllResultsPreviewCharacters = 180_000;
+    private const int MaxAllPathsPreviewCharacters = 48_000;
+    private const string OutputTruncationMessage = "Output truncated to keep the browser responsive.";
+
+    private static readonly JsonSerializerOptions PrettyJsonOptions = new()
+    {
+        WriteIndented = true,
+        MaxDepth = 64
+    };
+
     /// <summary>
     /// Result of a JSONPath evaluation.
     /// </summary>
     public sealed record EvaluationResult(
-        List<JsonNode?> AllMatches,
-        List<string> AllMatchPaths,
+        string? FirstMatchPreview,
+        string AllMatchesPreview,
+        string? FirstPathPreview,
+        string AllPathsPreview,
         string? Error,
         int MatchCount,
         int? JsonErrorLine = null,
-        int? JsonErrorColumn = null)
-    {
-        public JsonNode? FirstMatch => MatchCount > 0 ? AllMatches[0] : null;
-    }
+        int? JsonErrorColumn = null);
 
     /// <summary>
     /// Evaluates a JSONPath expression against a JSON string.
@@ -36,7 +47,7 @@ public class JsonPathEvaluatorService
     public async Task<EvaluationResult> EvaluateAsync(string json, string? path, bool validateJson = true)
     {
         if (string.IsNullOrWhiteSpace(json))
-            return new EvaluationResult(new List<JsonNode?>(), new List<string>(), "Please enter a JSON document.", 0);
+            return CreateErrorResult("Please enter a JSON document.");
 
         if (validateJson)
         {
@@ -55,8 +66,10 @@ public class JsonPathEvaluatorService
                     : string.Empty;
 
                 return new EvaluationResult(
-                    new List<JsonNode?>(),
-                    new List<string>(),
+                    null,
+                    string.Empty,
+                    null,
+                    "[]",
                     $"Invalid JSON{position}: {cleanMessage}",
                     0,
                     line,
@@ -69,21 +82,7 @@ public class JsonPathEvaluatorService
         var pathValidation = JsonPathValidator.Validate(trimmedPath);
         if (!pathValidation.IsValid)
         {
-            return new EvaluationResult(
-                new List<JsonNode?>(),
-                new List<string>(),
-                $"Invalid JSONPath expression: {pathValidation.Error}",
-                0);
-        }
-
-        if (trimmedPath == "$")
-        {
-            var root = JsonNode.Parse(json);
-            return new EvaluationResult(
-                new List<JsonNode?> { root! },
-                new List<string> { "$" },
-                null,
-                1);
+            return CreateErrorResult($"Invalid JSONPath expression: {pathValidation.Error}");
         }
 
         // Use the public Stream extension API from JsonPathPlus
@@ -91,59 +90,47 @@ public class JsonPathEvaluatorService
         {
             using var stream = new MemoryStream(Encoding.UTF8.GetBytes(json));
 
-            // Try parsing the path first to get an early error
-            // Note: The Stream extension methods will throw on invalid path,
-            // so we use try/catch to provide user-friendly errors
-            var allMatches = new List<JsonNode?>();
+            var previewBuilder = new EvaluationPreviewBuilder(trimmedPath);
             await foreach (var match in stream.ExtractAllJsonMatchesAsync(trimmedPath))
             {
-                allMatches.Add(match);
+                previewBuilder.AddMatch(match);
             }
 
-            // JsonPathPlus public API does not return concrete paths for each match,
-            // so use the evaluated expression for display context.
-            var allMatchPaths = Enumerable.Repeat(trimmedPath, allMatches.Count).ToList();
-
-            return new EvaluationResult(
-                allMatches,
-                allMatchPaths,
-                null,
-                allMatches.Count);
+            return previewBuilder.Build();
         }
         catch (FormatException ex)
         {
-            return new EvaluationResult(
-                new List<JsonNode?>(),
-                new List<string>(),
-                $"Invalid JSONPath expression: {ex.Message}",
-                0);
+            return CreateErrorResult($"Invalid JSONPath expression: {ex.Message}");
         }
         catch (ArgumentException ex)
         {
-            return new EvaluationResult(
-                new List<JsonNode?>(),
-                new List<string>(),
-                $"Invalid JSONPath expression: {ex.Message}",
-                0);
+            return CreateErrorResult($"Invalid JSONPath expression: {ex.Message}");
         }
         catch (InvalidOperationException ex)
         {
-            return new EvaluationResult(
-                new List<JsonNode?>(),
-                new List<string>(),
-                $"Error evaluating path: {ex.Message}",
-                0);
+            return CreateErrorResult($"Error evaluating path: {ex.Message}");
         }
         catch (Exception ex) when (ex.Message.Contains("JSON", StringComparison.OrdinalIgnoreCase)
                                    || ex.Message.Contains("path", StringComparison.OrdinalIgnoreCase))
         {
-            return new EvaluationResult(
-                new List<JsonNode?>(),
-                new List<string>(),
-                $"Error: {ex.Message}",
-                0);
+            return CreateErrorResult($"Error: {ex.Message}");
         }
     }
+
+    private static EvaluationResult CreateErrorResult(
+        string error,
+        int matchCount = 0,
+        int? jsonErrorLine = null,
+        int? jsonErrorColumn = null)
+        => new(
+            null,
+            string.Empty,
+            null,
+            "[]",
+            error,
+            matchCount,
+            jsonErrorLine,
+            jsonErrorColumn);
 
     private static string BuildJsonErrorMessage(string message)
     {
@@ -159,21 +146,295 @@ public class JsonPathEvaluatorService
             RegexOptions.CultureInvariant);
     }
 
-    /// <summary>
-    /// Pretty-prints a JsonNode to a formatted JSON string.
-    /// </summary>
-    public static string PrettyPrint(JsonNode? node)
+    private static string SerializeNodePreview(JsonNode? node, int maxBytes, bool includeTruncationMessage, out bool wasTruncated)
     {
         if (node is null)
-            return "null";
-
-        var options = new JsonSerializerOptions
         {
-            WriteIndented = true,
-            MaxDepth = 64
-        };
+            wasTruncated = false;
+            return "null";
+        }
 
-        return node.ToJsonString(options);
+        var bufferWriter = new LimitedBufferWriter(maxBytes);
+        var jsonWriter = new Utf8JsonWriter(bufferWriter, new JsonWriterOptions
+        {
+            Indented = true
+        });
+
+        wasTruncated = false;
+
+        try
+        {
+            node.WriteTo(jsonWriter);
+            jsonWriter.Flush();
+        }
+        catch (PreviewLimitExceededException)
+        {
+            wasTruncated = true;
+        }
+        finally
+        {
+            try
+            {
+                jsonWriter.Dispose();
+            }
+            catch (PreviewLimitExceededException)
+            {
+                wasTruncated = true;
+            }
+        }
+
+        var preview = bufferWriter.GetText();
+        if (!wasTruncated)
+        {
+            return preview;
+        }
+
+        if (!includeTruncationMessage)
+        {
+            return preview;
+        }
+
+        return string.IsNullOrWhiteSpace(preview)
+            ? OutputTruncationMessage
+            : preview + Environment.NewLine + Environment.NewLine + OutputTruncationMessage;
+    }
+
+    private static string IndentPreview(string value, int spaces)
+    {
+        if (string.IsNullOrEmpty(value))
+        {
+            return value;
+        }
+
+        var indent = new string(' ', spaces);
+        return string.Join(Environment.NewLine, value.Split('\n').Select(line => indent + line.TrimEnd('\r')));
+    }
+
+    private static string FinalizeArrayPreview(
+        StringBuilder builder,
+        int displayedCount,
+        int totalCount,
+        bool wasTruncated,
+        string singularLabel,
+        string pluralLabel)
+    {
+        if (builder.Length == 0)
+        {
+            builder.AppendLine("[");
+        }
+        else if (displayedCount > 0)
+        {
+            builder.AppendLine();
+        }
+
+        builder.Append(']');
+
+        if (!wasTruncated && displayedCount >= totalCount)
+        {
+            return builder.ToString();
+        }
+
+        var omittedCount = Math.Max(0, totalCount - displayedCount);
+        builder.AppendLine();
+        builder.AppendLine();
+        builder.Append(OutputTruncationMessage);
+
+        if (omittedCount > 0)
+        {
+            builder.Append(' ');
+            builder.Append(omittedCount);
+            builder.Append(' ');
+            builder.Append(omittedCount == 1 ? singularLabel : pluralLabel);
+            builder.Append(" omitted.");
+        }
+
+        return builder.ToString();
+    }
+
+    private sealed class EvaluationPreviewBuilder
+    {
+        private readonly string serializedPath;
+        private readonly StringBuilder allMatchesBuilder = new();
+        private readonly StringBuilder allPathsBuilder = new();
+
+        private int displayedMatchCount;
+        private int displayedPathCount;
+        private bool stopAppendingMatches;
+        private bool stopAppendingPaths;
+        private bool matchPreviewTruncated;
+
+        public EvaluationPreviewBuilder(string path)
+        {
+            serializedPath = JsonSerializer.Serialize(path, PrettyJsonOptions);
+        }
+
+        public string? FirstMatchPreview { get; private set; }
+
+        public string? FirstPathPreview { get; private set; }
+
+        public int MatchCount { get; private set; }
+
+        public void AddMatch(JsonNode? match)
+        {
+            MatchCount++;
+
+            FirstPathPreview ??= serializedPath;
+            FirstMatchPreview ??= SerializeNodePreview(match, MaxSinglePreviewBytes, includeTruncationMessage: true, out _);
+
+            if (!stopAppendingMatches)
+            {
+                AppendMatchPreview(match);
+            }
+
+            if (!stopAppendingPaths)
+            {
+                AppendPathPreview();
+            }
+        }
+
+        public EvaluationResult Build()
+        {
+            var allMatchesPreview = MatchCount == 0
+                ? string.Empty
+                : FinalizeArrayPreview(
+                    allMatchesBuilder,
+                    displayedMatchCount,
+                    MatchCount,
+                    stopAppendingMatches || matchPreviewTruncated,
+                    "match",
+                    "matches");
+
+            var allPathsPreview = MatchCount == 0
+                ? "[]"
+                : FinalizeArrayPreview(
+                    allPathsBuilder,
+                    displayedPathCount,
+                    MatchCount,
+                    stopAppendingPaths,
+                    "path",
+                    "paths");
+
+            return new EvaluationResult(
+                FirstMatchPreview,
+                allMatchesPreview,
+                FirstPathPreview,
+                allPathsPreview,
+                null,
+                MatchCount);
+        }
+
+        private void AppendMatchPreview(JsonNode? match)
+        {
+            EnsureArrayStarted(allMatchesBuilder);
+
+            var preview = SerializeNodePreview(match, MaxSinglePreviewBytes, includeTruncationMessage: true, out var wasTruncated);
+            var indentedPreview = IndentPreview(preview, 2);
+            var separatorLength = displayedMatchCount > 0 ? 2 : 0;
+            if (allMatchesBuilder.Length + separatorLength + indentedPreview.Length > MaxAllResultsPreviewCharacters)
+            {
+                stopAppendingMatches = true;
+                matchPreviewTruncated |= wasTruncated;
+                return;
+            }
+
+            if (displayedMatchCount > 0)
+            {
+                allMatchesBuilder.AppendLine(",");
+            }
+
+            allMatchesBuilder.Append(indentedPreview);
+            displayedMatchCount++;
+
+            if (wasTruncated)
+            {
+                matchPreviewTruncated = true;
+                stopAppendingMatches = true;
+            }
+        }
+
+        private void AppendPathPreview()
+        {
+            EnsureArrayStarted(allPathsBuilder);
+
+            var separatorLength = displayedPathCount > 0 ? 2 : 0;
+            var requiredLength = separatorLength + 2 + serializedPath.Length;
+            if (allPathsBuilder.Length + requiredLength > MaxAllPathsPreviewCharacters)
+            {
+                stopAppendingPaths = true;
+                return;
+            }
+
+            if (displayedPathCount > 0)
+            {
+                allPathsBuilder.AppendLine(",");
+            }
+
+            allPathsBuilder.Append("  ");
+            allPathsBuilder.Append(serializedPath);
+            displayedPathCount++;
+        }
+
+        private static void EnsureArrayStarted(StringBuilder builder)
+        {
+            if (builder.Length == 0)
+            {
+                builder.AppendLine("[");
+            }
+        }
+    }
+
+    private sealed class LimitedBufferWriter : IBufferWriter<byte>
+    {
+        private readonly byte[] buffer;
+        private int writtenCount;
+
+        public LimitedBufferWriter(int maxBytes)
+        {
+            if (maxBytes <= 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(maxBytes));
+            }
+
+            buffer = new byte[maxBytes];
+        }
+
+        public void Advance(int count)
+        {
+            if (count < 0 || writtenCount + count > buffer.Length)
+            {
+                throw new PreviewLimitExceededException();
+            }
+
+            writtenCount += count;
+        }
+
+        public Memory<byte> GetMemory(int sizeHint = 0)
+        {
+            EnsureCapacity(sizeHint);
+            return buffer.AsMemory(writtenCount);
+        }
+
+        public Span<byte> GetSpan(int sizeHint = 0)
+        {
+            EnsureCapacity(sizeHint);
+            return buffer.AsSpan(writtenCount);
+        }
+
+        public string GetText()
+            => Encoding.UTF8.GetString(buffer, 0, writtenCount);
+
+        private void EnsureCapacity(int sizeHint)
+        {
+            var requiredSize = sizeHint <= 0 ? 1 : sizeHint;
+            if (requiredSize > buffer.Length - writtenCount)
+            {
+                throw new PreviewLimitExceededException();
+            }
+        }
+    }
+
+    private sealed class PreviewLimitExceededException : Exception
+    {
     }
 }
 

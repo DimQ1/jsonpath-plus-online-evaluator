@@ -80,8 +80,10 @@
     private bool showFirstOnly = true;
     private bool showOutputPaths;
     private int matchCount;
-    private List<string> allMatchTexts = new();
-    private List<string> allMatchPaths = new();
+    private string? firstMatchPreview;
+    private string allMatchesPreview = string.Empty;
+    private string? firstPathPreview;
+    private string allPathsPreview = "[]";
     private string? jsonError;
     private string? pathError;
     private bool hasTyped;
@@ -142,16 +144,6 @@
     private bool HasPathError => !string.IsNullOrEmpty(pathError);
     private bool HasResults => matchCount > 0 && !HasPathError;
     private bool HasTyped => hasTyped;
-
-    private IEnumerable<string> DisplayResultTexts =>
-        showFirstOnly && allMatchTexts.Count > 0
-            ? new[] { allMatchTexts[0] }
-            : allMatchTexts;
-
-    private IEnumerable<string> DisplayResultPaths =>
-        showFirstOnly && allMatchPaths.Count > 0
-            ? new[] { allMatchPaths[0] }
-            : allMatchPaths;
 
     private bool ShowOutputPaths
     {
@@ -253,9 +245,7 @@
         jsonError = null;
         pathError = null;
         hasTyped = false;
-        allMatchTexts = new();
-        allMatchPaths = new();
-        matchCount = 0;
+        ClearEvaluationResultState();
         showHistory = false;
         jsonChangedSinceLastEvaluation = true;
         lastJsonWasValid = true;
@@ -601,9 +591,7 @@
     {
         if (string.IsNullOrWhiteSpace(_jsonInput) && string.IsNullOrWhiteSpace(_pathInput))
         {
-            allMatchTexts = new();
-            allMatchPaths = new();
-            matchCount = 0;
+            ClearEvaluationResultState();
             RefreshResultDisplayText();
             return;
         }
@@ -614,9 +602,7 @@
         {
             jsonError = null;
             pathError = pathValidationError;
-            allMatchTexts = new();
-            allMatchPaths = new();
-            matchCount = 0;
+            ClearEvaluationResultState();
             RefreshResultDisplayText();
             await UpdateJsonErrorMarkerAsync(null, null, null);
             StateHasChanged();
@@ -626,8 +612,10 @@
         if (!jsonChangedSinceLastEvaluation && !lastJsonWasValid)
         {
             result = new JsonPathWorkerEvaluationResult(
-                new List<string>(),
-                new List<string>(),
+                null,
+                string.Empty,
+                null,
+                "[]",
                 lastJsonValidationError,
                 0,
                 lastJsonValidationLine,
@@ -652,8 +640,10 @@
 
                 result = JsonSerializer.Deserialize<JsonPathWorkerEvaluationResult>(serializedResult)
                     ?? new JsonPathWorkerEvaluationResult(
-                        new List<string>(),
-                        new List<string>(),
+                        null,
+                        string.Empty,
+                        null,
+                        "[]",
                         "Worker returned an empty evaluation result.",
                         0);
             }
@@ -664,8 +654,10 @@
             catch (JSException ex)
             {
                 result = new JsonPathWorkerEvaluationResult(
-                    new List<string>(),
-                    new List<string>(),
+                    null,
+                    string.Empty,
+                    null,
+                    "[]",
                     $"Worker evaluation failed: {ex.Message}",
                     0);
             }
@@ -704,16 +696,16 @@
                 pathError = result.Error;
             }
 
-            allMatchTexts = new();
-            allMatchPaths = new();
-            matchCount = 0;
+            ClearEvaluationResultState();
         }
         else
         {
             jsonError = null;
             pathError = null;
-            allMatchTexts = result.PrettyMatches;
-            allMatchPaths = result.AllMatchPaths;
+            firstMatchPreview = result.FirstMatchPreview;
+            allMatchesPreview = result.AllMatchesPreview;
+            firstPathPreview = result.FirstPathPreview;
+            allPathsPreview = result.AllPathsPreview;
             matchCount = result.MatchCount;
 
             if (persistResult)
@@ -737,6 +729,15 @@
     {
         resultDisplayText = BuildResultsDisplayText();
         QueueResultEditorUpdate();
+    }
+
+    private void ClearEvaluationResultState()
+    {
+        firstMatchPreview = null;
+        allMatchesPreview = string.Empty;
+        firstPathPreview = null;
+        allPathsPreview = "[]";
+        matchCount = 0;
     }
 
     private void QueueResultEditorUpdate()
@@ -857,12 +858,11 @@
 
         if (showOutputPaths)
         {
-            if (DisplayResultPaths.Any())
+            if (matchCount > 0)
             {
-                object outputPaths = showFirstOnly
-                    ? DisplayResultPaths.First()
-                    : DisplayResultPaths.ToList();
-                return JsonSerializer.Serialize(outputPaths, new JsonSerializerOptions { WriteIndented = true });
+                return showFirstOnly
+                    ? firstPathPreview ?? "null"
+                    : allPathsPreview;
             }
 
             return "[]";
@@ -872,27 +872,13 @@
         {
             if (showFirstOnly)
             {
-                return DisplayResultTexts.FirstOrDefault() ?? "null";
+                return firstMatchPreview ?? "null";
             }
 
-            var prettyMatches = DisplayResultTexts
-                .Select(text => IndentBlock(text, 2));
-
-            return "[\n" + string.Join(",\n", prettyMatches) + "\n]";
+            return allMatchesPreview;
         }
 
         return "No matches found";
-    }
-
-    private static string IndentBlock(string value, int spaces)
-    {
-        if (string.IsNullOrEmpty(value))
-        {
-            return value;
-        }
-
-        var indent = new string(' ', spaces);
-        return string.Join("\n", value.Split('\n').Select(line => indent + line));
     }
 
     // ===== URL Hash State Restore =====

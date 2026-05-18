@@ -2,9 +2,13 @@ namespace JsonPathPlus.Evaluator.Workers;
 
 public sealed class JsonPathWorkerEvaluationResult
 {
-    public List<string> PrettyMatches { get; set; } = new();
+    public string? FirstMatchPreview { get; set; }
 
-    public List<string> AllMatchPaths { get; set; } = new();
+    public string AllMatchesPreview { get; set; } = string.Empty;
+
+    public string? FirstPathPreview { get; set; }
+
+    public string AllPathsPreview { get; set; } = "[]";
 
     public string? Error { get; set; }
 
@@ -19,15 +23,19 @@ public sealed class JsonPathWorkerEvaluationResult
     }
 
     public JsonPathWorkerEvaluationResult(
-        List<string> prettyMatches,
-        List<string> allMatchPaths,
+        string? firstMatchPreview,
+        string allMatchesPreview,
+        string? firstPathPreview,
+        string allPathsPreview,
         string? error,
         int matchCount,
         int? jsonErrorLine = null,
         int? jsonErrorColumn = null)
     {
-        PrettyMatches = prettyMatches;
-        AllMatchPaths = allMatchPaths;
+        FirstMatchPreview = firstMatchPreview;
+        AllMatchesPreview = allMatchesPreview;
+        FirstPathPreview = firstPathPreview;
+        AllPathsPreview = allPathsPreview;
         Error = error;
         MatchCount = matchCount;
         JsonErrorLine = jsonErrorLine;

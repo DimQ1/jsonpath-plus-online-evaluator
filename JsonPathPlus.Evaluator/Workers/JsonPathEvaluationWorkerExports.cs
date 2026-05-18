@@ -16,8 +16,10 @@ internal static partial class JsonPathEvaluationWorkerExports
         var result = await evaluator.EvaluateAsync(json, path, validateJson);
 
         var payload = new JsonPathWorkerEvaluationResult(
-            result.AllMatches.Select(JsonPathEvaluatorService.PrettyPrint).ToList(),
-            result.AllMatchPaths,
+            result.FirstMatchPreview,
+            result.AllMatchesPreview,
+            result.FirstPathPreview,
+            result.AllPathsPreview,
             result.Error,
             result.MatchCount,
             result.JsonErrorLine,
