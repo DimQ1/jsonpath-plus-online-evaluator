@@ -1,0 +1,476 @@
+@page "/"
+@inject IJSRuntime JS
+
+@* Provided by _Imports: System.Text.Json.Nodes, JsonPathPlus.Evaluator.Services *@
+
+@* ========== CODE BEHIND ========== *@
+@code {
+    // ===== Sample Data =====
+    private const string SampleJson =
+@"{
+  ""store"": {
+    ""name"": ""City Books"",
+    ""bicycle"": {
+      ""color"": ""red"",
+      ""price"": 250
+    },
+    ""book"": [
+      {
+        ""title"": ""The Great Gatsby"",
+        ""author"": ""F. Scott Fitzgerald"",
+        ""price"": 8.99,
+        ""isbn"": ""978-0743273565"",
+        ""category"": ""fiction""
+      },
+      {
+        ""title"": ""Clean Code"",
+        ""author"": ""Robert C. Martin"",
+        ""price"": 34.99,
+        ""isbn"": ""978-0132350884"",
+        ""category"": ""technology""
+      },
+      {
+        ""title"": ""The Hobbit"",
+        ""author"": ""J.R.R. Tolkien"",
+        ""price"": 12.49,
+        ""isbn"": ""978-0547928227"",
+        ""category"": ""fiction""
+      },
+      {
+        ""title"": ""Design Patterns"",
+        ""author"": ""Gang of Four"",
+        ""price"": 45.00,
+        ""isbn"": ""978-0201633610"",
+        ""category"": ""technology""
+      }
+    ]
+  }
+}";
+
+    private const string SamplePath = @"$.store.book[?(@.price < 20)].title";
+
+    private static readonly List<(string example, string description)> SyntaxRows = new()
+    {
+        (@"$", "Entire document (root)"),
+        (@"$.store.name", "Named property"),
+        (@"$.store.book[0].title", "Array index (zero-based)"),
+        (@"$.store.book[1:3].title", "Array range (exclusive end)"),
+        (@"$.store.book[:2].title", "Open-start range (first N)"),
+        (@"$.store.book[2:].title", "Open-end range (from N to end)"),
+        (@"$.store.book[*].title", "Wildcard — all array elements"),
+        (@"$.store.*", "Wildcard — all object properties"),
+        (@"$.store.book[-1].title", "Negative index (last element)"),
+        (@"$.store.book[-2:].title", "Negative range (last N elements)"),
+        (@"$.store.book[0,2,3].title", "Union indices"),
+        (@"$.store.book[0][title,author]", "Union properties"),
+        (@"$..isbn", "Recursive descent by property name"),
+        (@"$..*", "Recursive descent — all nodes"),
+        (@"$.store.book[?(@.isbn)].title", "Existence filter (has property)"),
+        (@"$.store.book[?(@.price < 10)].title", "Comparison filter (<, >, <=, >=, ==, !=)"),
+        (@"$.store.book[?(@.price > 10 && @.price < 40)].title", "Logical filter (&&, ||)"),
+        (@"$.store.book[(@.length-1)].title", "Computed index expression"),
+    };
+
+    // ===== State =====
+    private string _jsonInput = SampleJson;
+    private string _pathInput = SamplePath;
+    private bool showFirstOnly = true;
+    private int matchCount;
+    private List<JsonNode?> allMatches = new();
+    private string? jsonError;
+    private string? pathError;
+    private bool hasTyped;
+    private bool showToast;
+    private string toastMessage = "";
+    private Timer? debounceTimer;
+
+    // ===== Properties with Debounced Evaluation =====
+    private string jsonInput
+    {
+        get => _jsonInput;
+        set
+        {
+            _jsonInput = value;
+            jsonError = null;
+            hasTyped = true;
+            DebounceEvaluate();
+        }
+    }
+
+    private string pathInput
+    {
+        get => _pathInput;
+        set
+        {
+            _pathInput = value;
+            pathError = null;
+            hasTyped = true;
+            DebounceEvaluate();
+        }
+    }
+
+    // ===== Computed =====
+    private bool HasJsonError => !string.IsNullOrEmpty(jsonError);
+    private bool HasPathError => !string.IsNullOrEmpty(pathError);
+    private bool HasResults => matchCount > 0 && !HasPathError;
+    private bool HasTyped => hasTyped;
+
+    private IEnumerable<JsonNode?> DisplayResults =>
+        showFirstOnly && allMatches.Count > 0
+            ? new[] { allMatches[0] }
+            : allMatches;
+
+    // ===== Lifecycle =====
+    protected override async Task OnInitializedAsync()
+    {
+        await TryRestoreFromHashAsync();
+        if (!hasTyped)
+        {
+            // Preload sample evaluation
+            await EvaluateAsync();
+        }
+    }
+
+    // ===== Event Handlers =====
+    private void SetMode(bool firstOnly)
+    {
+        showFirstOnly = firstOnly;
+    }
+
+    private void UseSyntaxExample(string example)
+    {
+        _pathInput = example;
+        pathError = null;
+        hasTyped = true;
+        _ = EvaluateAsync();
+        StateHasChanged();
+    }
+
+    private async Task ResetAsync()
+    {
+        _jsonInput = SampleJson;
+        _pathInput = SamplePath;
+        showFirstOnly = true;
+        jsonError = null;
+        pathError = null;
+        hasTyped = false;
+        allMatches = new();
+        matchCount = 0;
+
+        // Clear URL hash
+        await JS.InvokeVoidAsync("eval", "history.replaceState(null, '', window.location.pathname);");
+        await EvaluateAsync();
+        StateHasChanged();
+    }
+
+    private async Task ShareAsync()
+    {
+        try
+        {
+            var json = Uri.EscapeDataString(_jsonInput);
+            var path = Uri.EscapeDataString(_pathInput);
+            var origin = await JS.InvokeAsync<string>("eval", "window.location.origin + window.location.pathname");
+            var url = $"{origin}#json={json}&path={path}";
+
+            await JS.InvokeVoidAsync("navigator.clipboard.writeText", url);
+            ShowToast("URL copied to clipboard!");
+        }
+        catch
+        {
+            ShowToast("Failed to copy URL. Try a different browser.");
+        }
+    }
+
+    private async Task OnFileSelected(InputFileChangeEventArgs e)
+    {
+        try
+        {
+            var file = e.File;
+            if (file is null || file.Size == 0) return;
+
+            using var stream = file.OpenReadStream(maxAllowedSize: 10 * 1024 * 1024);
+            using var reader = new StreamReader(stream);
+            _jsonInput = await reader.ReadToEndAsync();
+            jsonError = null;
+            hasTyped = true;
+            StateHasChanged();
+            await EvaluateAsync();
+        }
+        catch (Exception ex)
+        {
+            jsonError = $"Failed to read file: {ex.Message}";
+        }
+    }
+
+    private async Task OpenFilePicker()
+    {
+        await JS.InvokeVoidAsync("eval", "document.getElementById('fileInput').click()");
+    }
+
+    // ===== Evaluation Logic =====
+    private void DebounceEvaluate()
+    {
+        debounceTimer?.Dispose();
+        debounceTimer = new Timer(async _ =>
+        {
+            await InvokeAsync(EvaluateAsync);
+        }, null, 300, Timeout.Infinite);
+    }
+
+    private async Task EvaluateAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_jsonInput) && string.IsNullOrWhiteSpace(_pathInput))
+        {
+            allMatches = new();
+            matchCount = 0;
+            return;
+        }
+
+        var evaluator = new JsonPathEvaluatorService();
+        var result = await evaluator.EvaluateAsync(_jsonInput, _pathInput);
+
+        if (result.Error is not null)
+        {
+            if (result.Error.Contains("Invalid JSON", StringComparison.OrdinalIgnoreCase))
+            {
+                jsonError = result.Error;
+                pathError = null;
+            }
+            else
+            {
+                jsonError = null;
+                pathError = result.Error;
+            }
+
+            allMatches = new();
+            matchCount = 0;
+        }
+        else
+        {
+            jsonError = null;
+            pathError = null;
+            allMatches = result.AllMatches;
+            matchCount = result.MatchCount;
+        }
+
+        StateHasChanged();
+    }
+
+    private static string PrettyPrintJson(JsonNode? node)
+    {
+        return JsonPathEvaluatorService.PrettyPrint(node);
+    }
+
+    // ===== URL Hash State Restore =====
+    private async Task TryRestoreFromHashAsync()
+    {
+        try
+        {
+            var hash = await JS.InvokeAsync<string>("eval", "window.location.hash");
+            if (string.IsNullOrEmpty(hash) || !hash.StartsWith("#json="))
+                return;
+
+            hash = hash.TrimStart('#');
+            var parts = hash.Split('&');
+            var jsonPart = "";
+            var pathPart = "";
+
+            foreach (var part in parts)
+            {
+                if (part.StartsWith("json="))
+                    jsonPart = Uri.UnescapeDataString(part[5..]);
+                else if (part.StartsWith("path="))
+                    pathPart = Uri.UnescapeDataString(part[5..]);
+            }
+
+            if (!string.IsNullOrEmpty(jsonPart))
+            {
+                _jsonInput = jsonPart;
+                hasTyped = true;
+            }
+            if (!string.IsNullOrEmpty(pathPart))
+            {
+                _pathInput = pathPart;
+                hasTyped = true;
+            }
+        }
+        catch
+        {
+            // Ignore hash parse errors; use defaults
+        }
+    }
+
+    // ===== Toast =====
+    private void ShowToast(string message)
+    {
+        toastMessage = message;
+        showToast = true;
+        StateHasChanged();
+
+        _ = Task.Run(async () =>
+        {
+            await Task.Delay(2000);
+            await InvokeAsync(() =>
+            {
+                showToast = false;
+                StateHasChanged();
+            });
+        });
+    }
+}
+
+@* ========== MAIN LAYOUT ========== *@
+<div class="evaluator-header">
+    <div class="evaluator-title">
+        <span class="icon">&#x1F50D;</span>
+        <span>JsonPathPlus Online Evaluator</span>
+        <span class="version">v1.0.0</span>
+    </div>
+    <div class="header-actions">
+        <button class="btn" @onclick="ResetAsync" title="Clear inputs and reset to sample">
+            <span>&#x21BA;</span> Reset
+        </button>
+        <button class="btn" @onclick="ShareAsync" title="Copy shareable URL to clipboard">
+            <span>&#x1F517;</span> Share
+        </button>
+        <a class="btn" href="https://www.nuget.org/packages/JsonPathPlus" target="_blank" title="JsonPathPlus NuGet package">
+            <span>&#x1F4E6;</span> NuGet
+        </a>
+        <a class="btn" href="https://github.com/Dimq1/JsonPathPlus" target="_blank" title="JsonPathPlus source on GitHub">
+            <span>&#x2B55;</span> GitHub
+        </a>
+    </div>
+</div>
+
+@* ========== PATH INPUT BAR ========== *@
+<div class="path-input-bar">
+    <label for="pathInput">JSONPath</label>
+    <input id="pathInput"
+           class="path-input @(HasPathError ? "error" : (HasResults ? "success" : ""))"
+           type="text"
+           placeholder="e.g. $.store.book[*].title"
+           @bind-value="pathInput"
+           @bind-value:event="oninput"
+           spellcheck="false" />
+    <div class="match-mode-toggle">
+        <button class="@(showFirstOnly ? "active" : "")"
+                @onclick="() => SetMode(true)"
+                title="Show only the first match">
+            First
+        </button>
+        <button class="@(showFirstOnly ? "" : "active")"
+                @onclick="() => SetMode(false)"
+                title="Show all matches">
+            All
+        </button>
+    </div>
+</div>
+
+@* ========== MAIN PANELS ========== *@
+<div class="panels-container">
+    @* Left: JSON Document *@
+    <div class="panel document-panel">
+        <div class="panel-header">
+            <span>Document</span>
+            <InputFile OnChange="OnFileSelected" accept=".json" style="display:none" id="fileInput" />
+            <button class="btn" @onclick="OpenFilePicker" title="Import a .json file from disk">
+                <span>&#x1F4C2;</span> Import File
+            </button>
+        </div>
+        <div class="panel-body">
+            <textarea class="@(HasJsonError ? "error" : "")"
+                      @bind-value="jsonInput"
+                      @bind-value:event="oninput"
+                      placeholder="Paste your JSON document here..."
+                      spellcheck="false">
+            </textarea>
+        </div>
+        @if (HasJsonError && !string.IsNullOrEmpty(jsonError))
+        {
+            <div class="error-message">@jsonError</div>
+        }
+    </div>
+
+    @* Right: Evaluation Results *@
+    <div class="panel">
+        <div class="panel-header">
+            <span>Evaluation Results</span>
+            <span class="match-count @(matchCount == 0 ? "zero" : "")">
+                @matchCount match@(matchCount == 1 ? "" : "es")
+            </span>
+        </div>
+        <div class="panel-body">
+            @if (HasPathError && !string.IsNullOrEmpty(pathError))
+            {
+                <div class="result-display" style="color: var(--color-error); white-space: pre-wrap;">
+                    @pathError
+                </div>
+            }
+            else if (HasResults)
+            {
+                <div class="result-display">
+                    @foreach (var (node, index) in DisplayResults.Select((n, i) => (n, i)))
+                    {
+                        <div class="result-item">
+                            @if (!showFirstOnly)
+                            {
+                                <div class="result-index">Match @(index + 1)</div>
+                            }
+                            @PrettyPrintJson(node)
+                        </div>
+                    }
+                </div>
+            }
+            else if (HasTyped)
+            {
+                <div class="result-display" style="color: var(--color-text-secondary); display: flex; align-items: center; justify-content: center; height: 100%;">
+                    No matches found
+                </div>
+            }
+            else
+            {
+                <div class="result-empty">
+                    Enter a JSON document and a JSONPath expression to evaluate
+                </div>
+            }
+        </div>
+    </div>
+</div>
+
+@* ========== SYNTAX REFERENCE ========== *@
+<details class="syntax-reference">
+    <summary>Syntax Reference</summary>
+    <table class="syntax-table">
+        <thead>
+            <tr>
+                <th style="width:35%">Syntax</th>
+                <th style="width:50%">Description</th>
+                <th style="width:15%">Status</th>
+            </tr>
+        </thead>
+        <tbody>
+            @foreach (var (example, description) in SyntaxRows)
+            {
+                <tr>
+                    <td>
+                        <span class="syntax-example"
+                              @onclick="() => UseSyntaxExample(example)"
+                              title="Click to try this example">
+                            @example
+                        </span>
+                    </td>
+                    <td class="syntax-desc">@description</td>
+                    <td><span class="syntax-status">&#x2714; Supported</span></td>
+                </tr>
+            }
+        </tbody>
+    </table>
+</details>
+
+@* ========== TOAST NOTIFICATION ========== *@
+@if (showToast)
+{
+    <div class="toast">@toastMessage</div>
+}
+
+
