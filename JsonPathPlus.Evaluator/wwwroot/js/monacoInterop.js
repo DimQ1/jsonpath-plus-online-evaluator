@@ -1,5 +1,5 @@
 (function () {
-    var monacoBaseUrl = 'https://cdn.jsdelivr.net/npm/monaco-editor@0.52.2/min/vs';
+    var monacoBaseUrl = 'https://cdn.jsdelivr.net/npm/monaco-editor@0.55.1/min/vs';
     var monacoReadyPromise = null;
     var hoverRegistration = null;
     var hoverEnhancerObserver = null;
@@ -178,8 +178,6 @@
 
             title.textContent = 'JsonPath';
 
-            var titleHover = title.closest('.markdown-hover');
-
             var codeContainer = hoverContents.querySelector('.code-hover-contents .rendered-markdown');
             if (!codeContainer) {
                 continue;
@@ -190,7 +188,14 @@
                 continue;
             }
 
-            var actionRow = hoverContents.querySelector('.jsonpath-hover-actions');
+            var codeHover = codeContainer.closest('.markdown-hover');
+            if (!codeHover) {
+                continue;
+            }
+
+            codeHover.classList.add('jsonpath-hover-code');
+
+            var actionRow = codeHover.querySelector('.jsonpath-hover-actions');
             if (!actionRow) {
                 actionRow = document.createElement('div');
                 actionRow.className = 'jsonpath-hover-actions';
@@ -201,82 +206,13 @@
                 copyButton.textContent = 'Copy';
 
                 actionRow.appendChild(copyButton);
+                codeHover.appendChild(actionRow);
             }
 
             var button = actionRow.querySelector('.jsonpath-hover-copy-button');
-            if (button) {
+            if (button && button.dataset.jsonPath !== jsonPath) {
                 button.dataset.jsonPath = jsonPath;
             }
-
-            var pathValue = hoverContents.querySelector('.jsonpath-hover-value');
-            if (!pathValue) {
-                pathValue = document.createElement('div');
-                pathValue.className = 'jsonpath-hover-value';
-            }
-
-            var codeHover = codeContainer.closest('.markdown-hover');
-            if (codeHover) {
-                codeHover.style.display = 'none';
-            }
-
-            pathValue.textContent = jsonPath;
-
-            if (actionRow.parentNode !== hoverContents) {
-                hoverContents.appendChild(actionRow);
-            }
-
-            if (pathValue.parentNode !== hoverContents) {
-                hoverContents.appendChild(pathValue);
-            }
-
-            if (actionRow !== pathValue.nextSibling) {
-                hoverContents.insertBefore(pathValue, actionRow);
-            }
-
-            if (titleHover) {
-                var anchorNode = titleHover.nextSibling;
-                if (pathValue !== anchorNode) {
-                    hoverContents.insertBefore(pathValue, anchorNode);
-                }
-            }
-
-            if (codeHover) {
-                hoverContents.insertBefore(actionRow, codeHover);
-            } else {
-                hoverContents.appendChild(actionRow);
-            }
-
-            resizeJsonPathHover(hoverContents);
-        }
-    }
-
-    function resizeJsonPathHover(hoverContents) {
-        if (!hoverContents) {
-            return;
-        }
-
-        var hoverWidget = hoverContents.closest('.monaco-hover');
-        var hoverRow = hoverContents.closest('.hover-row');
-        var hoverContent = hoverContents.closest('.monaco-hover-content');
-        var scrollable = hoverContents.closest('.monaco-scrollable-element');
-        var requiredHeight = Math.ceil(hoverContents.scrollHeight);
-
-        if (!requiredHeight || !hoverContent || !scrollable) {
-            return;
-        }
-
-        if (hoverWidget) {
-            hoverWidget.style.height = requiredHeight + 'px';
-            hoverWidget.style.overflow = 'visible';
-        }
-
-        hoverContent.style.height = requiredHeight + 'px';
-        hoverContent.style.overflow = 'visible';
-        scrollable.style.height = requiredHeight + 'px';
-        scrollable.style.overflow = 'visible';
-
-        if (hoverRow) {
-            hoverRow.style.height = requiredHeight + 'px';
         }
     }
 

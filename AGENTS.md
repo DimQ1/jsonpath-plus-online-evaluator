@@ -51,6 +51,9 @@
 - The workflow path filter means changes to `.github/workflows/deploy.yml` alone won't trigger deployment; also touch a file under `JsonPathPlus.Evaluator/`.
 - The `ghaction-rewrite-base-href` action only has `v1` / `v1.1.0` tags; `v2` does not exist.
 
+## Skills
+- **monaco-blazor** — [.github/skills/monaco-blazor/SKILL.md](.github/skills/monaco-blazor/SKILL.md): Integrate monaco-editor into a Blazor WASM project (AMD loader, JS interop, error markers, context-menu suppression, disposal).
+
 ## Agent Behavior Guidance
 - The evaluator is a thin consumer of JsonPathPlus; changes to evaluation logic should happen in the library first.
 - When modifying [Index.razor](JsonPathPlus.Evaluator/Pages/Index.razor), the single `@code` block holds all state; keep it that way unless the file grows significantly.

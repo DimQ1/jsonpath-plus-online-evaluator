@@ -489,10 +489,26 @@ html, body {
     min-height: 0;
 }
 
+.jsonpath-hover-code {
+    position: relative;
+}
+
+.jsonpath-hover-code pre {
+    padding-right: 5rem;
+}
+
 .jsonpath-hover-actions {
     display: flex;
     justify-content: flex-end;
     margin: 0 0 6px;
+}
+
+.jsonpath-hover-code .jsonpath-hover-actions {
+    position: absolute;
+    top: 6px;
+    right: 6px;
+    margin: 0;
+    z-index: 1;
 }
 
 .jsonpath-hover-copy-button {
