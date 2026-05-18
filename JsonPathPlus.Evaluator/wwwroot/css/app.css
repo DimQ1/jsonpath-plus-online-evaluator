@@ -1,5 +1,6 @@
 /* ===== Reset & Base ===== */
 /* Deployment trigger: keep workflow path filter active for publish runs. */
+/* Deployment trigger #2: ensure workflow runs after configure-pages fix. */
 *, *::before, *::after {
     box-sizing: border-box;
     margin: 0;
