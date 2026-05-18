@@ -1,5 +1,6 @@
 @page "/"
 @inject IJSRuntime JS
+@using System.Text.Json
 
 @* Provided by _Imports: System.Text.Json.Nodes, JsonPathPlus.Evaluator.Services *@
 
@@ -75,8 +76,10 @@
     private string _jsonInput = SampleJson;
     private string _pathInput = SamplePath;
     private bool showFirstOnly = true;
+    private bool showOutputPaths;
     private int matchCount;
     private List<JsonNode?> allMatches = new();
+    private List<string> allMatchPaths = new();
     private string? jsonError;
     private string? pathError;
     private bool hasTyped;
@@ -84,25 +87,44 @@
     private string toastMessage = "";
     private Timer? debounceTimer;
     private bool showHistory;
+    private ElementReference jsonEditorRef;
+    private ElementReference jsonEditorGutterRef;
+    private int jsonEditorActiveLine = 1;
+    private double jsonEditorScrollTop;
+    private double jsonEditorClientHeight = 600;
+    private int jsonEditorFirstVisibleLine = 1;
+    private int jsonEditorVisibleLineCount = 120;
+
+    private string resultDisplayText = "";
+    private string[] resultDisplayLines = Array.Empty<string>();
+    private int resultVisibleLineCount;
+
+    private const double JsonEditorLineHeightPx = 20.15;
+    private const int JsonEditorLineBuffer = 20;
+    private const int ResultChunkSize = 220;
 
     // ===== History Model =====
     private sealed record HistoryEntry(
-        string Json,
+        string Id,
         string Path,
         string Timestamp,
-        int MatchCount)
+        int MatchCount,
+        string JsonPreview,
+        string? Json = null)
     {
         public string DisplayText =>
             $"{Path} → {MatchCount} match{(MatchCount == 1 ? "" : "es")}";
 
-        public string ShortJson =>
-            Json.Length > 80 ? Json[..80] + "…" : Json;
+        public string ShortJson => JsonPreview;
     }
+
+    private readonly record struct ScrollInfo(double ScrollTop, double ClientHeight);
 
     private List<HistoryEntry> historyEntries = new();
     private const int MaxHistoryEntries = 20;
     private const string LocalStorageStateKey = "jpplus_state";
     private const string LocalStorageHistoryKey = "jpplus_history";
+    private const string LocalStorageHistoryBlobPrefix = "jpplus_history_json_";
 
     // ===== Properties with Debounced Evaluation =====
     private string jsonInput
@@ -113,6 +135,7 @@
             _jsonInput = value;
             jsonError = null;
             hasTyped = true;
+            UpdateJsonEditorViewport();
             DebounceEvaluate();
         }
     }
@@ -140,6 +163,56 @@
             ? new[] { allMatches[0] }
             : allMatches;
 
+    private IEnumerable<string> DisplayResultPaths =>
+        showFirstOnly && allMatchPaths.Count > 0
+            ? new[] { allMatchPaths[0] }
+            : allMatchPaths;
+
+    private bool ShowOutputPaths
+    {
+        get => showOutputPaths;
+        set
+        {
+            if (showOutputPaths == value)
+            {
+                return;
+            }
+
+            showOutputPaths = value;
+            RefreshResultDisplayText();
+        }
+    }
+
+    private int JsonEditorLineCount => Math.Max(1, _jsonInput.Count(c => c == '\n') + 1);
+
+    private int JsonEditorLastVisibleLine => Math.Min(
+        JsonEditorLineCount,
+        jsonEditorFirstVisibleLine + jsonEditorVisibleLineCount - 1);
+
+    private IEnumerable<int> JsonEditorVisibleLineNumbers
+    {
+        get
+        {
+            var count = JsonEditorLastVisibleLine - jsonEditorFirstVisibleLine + 1;
+            if (count <= 0)
+            {
+                return Array.Empty<int>();
+            }
+
+            return Enumerable.Range(jsonEditorFirstVisibleLine, count);
+        }
+    }
+
+    private double JsonEditorTopPaddingPx => Math.Max(0, (jsonEditorFirstVisibleLine - 1) * JsonEditorLineHeightPx);
+
+    private double JsonEditorBottomPaddingPx => Math.Max(0, (JsonEditorLineCount - JsonEditorLastVisibleLine) * JsonEditorLineHeightPx);
+
+    private string VisibleResultDisplayText => resultDisplayLines.Length <= resultVisibleLineCount
+        ? resultDisplayText
+        : string.Join("\n", resultDisplayLines.Take(resultVisibleLineCount));
+
+    private bool HasMoreResultLines => resultDisplayLines.Length > resultVisibleLineCount;
+
     // ===== Lifecycle =====
     protected override async Task OnInitializedAsync()
     {
@@ -160,12 +233,16 @@
         {
             await EvaluateAsync();
         }
+
+        RefreshResultDisplayText();
+        UpdateJsonEditorViewport();
     }
 
     // ===== Event Handlers =====
     private void SetMode(bool firstOnly)
     {
         showFirstOnly = firstOnly;
+        RefreshResultDisplayText();
     }
 
     private void UseSyntaxExample(string example)
@@ -186,6 +263,7 @@
         pathError = null;
         hasTyped = false;
         allMatches = new();
+        allMatchPaths = new();
         matchCount = 0;
         showHistory = false;
 
@@ -202,18 +280,42 @@
 
     private async Task RestoreFromHistory(HistoryEntry entry)
     {
-        _jsonInput = entry.Json;
+        var json = entry.Json;
+        if (string.IsNullOrEmpty(json))
+        {
+            json = await JS.InvokeAsync<string>("eval", $"localStorage.getItem('{GetHistoryBlobKey(entry.Id)}')");
+        }
+
+        if (string.IsNullOrEmpty(json))
+        {
+            ShowToast("History entry payload is missing.");
+            return;
+        }
+
+        _jsonInput = json;
         _pathInput = entry.Path;
         jsonError = null;
         pathError = null;
         hasTyped = true;
         showHistory = false;
+
+        var idx = historyEntries.FindIndex(h => h.Id == entry.Id);
+        if (idx >= 0 && historyEntries[idx].Json is null)
+        {
+            historyEntries[idx] = historyEntries[idx] with { Json = json };
+        }
+
         StateHasChanged();
         await EvaluateAsync();
     }
 
     private async Task ClearHistoryAsync()
     {
+        foreach (var entry in historyEntries)
+        {
+            await JS.InvokeVoidAsync("eval", $"localStorage.removeItem('{GetHistoryBlobKey(entry.Id)}')");
+        }
+
         historyEntries.Clear();
         await JS.InvokeVoidAsync("eval", $"localStorage.removeItem('{LocalStorageHistoryKey}')");
         showHistory = false;
@@ -269,19 +371,44 @@
         if (string.IsNullOrWhiteSpace(_jsonInput) || string.IsNullOrWhiteSpace(_pathInput))
             return;
 
-        // Remove duplicate (same json + path)
-        historyEntries.RemoveAll(e => e.Json == _jsonInput && e.Path == _pathInput);
+        var preview = _jsonInput.Length > 80 ? _jsonInput[..80] + "…" : _jsonInput;
+
+        // Remove duplicate (same path + preview)
+        var duplicateIds = historyEntries
+            .Where(e => e.Path == _pathInput && e.JsonPreview == preview)
+            .Select(e => e.Id)
+            .ToList();
+
+        historyEntries.RemoveAll(e => e.Path == _pathInput && e.JsonPreview == preview);
+
+        foreach (var duplicateId in duplicateIds)
+        {
+            await JS.InvokeVoidAsync("eval", $"localStorage.removeItem('{GetHistoryBlobKey(duplicateId)}')");
+        }
+
+        var entryId = Guid.NewGuid().ToString("N");
+        await JS.InvokeVoidAsync("eval",
+            $"localStorage.setItem('{GetHistoryBlobKey(entryId)}', `{EscapeForTemplateLiteral(_jsonInput)}`)");
 
         // Add to front
         historyEntries.Insert(0, new HistoryEntry(
-            _jsonInput,
+            entryId,
             _pathInput,
             DateTime.Now.ToString("HH:mm:ss"),
-            matchCount));
+            matchCount,
+            preview));
 
         // Trim
         if (historyEntries.Count > MaxHistoryEntries)
+        {
+            var removed = historyEntries.Skip(MaxHistoryEntries).ToList();
             historyEntries = historyEntries.Take(MaxHistoryEntries).ToList();
+
+            foreach (var item in removed)
+            {
+                await JS.InvokeVoidAsync("eval", $"localStorage.removeItem('{GetHistoryBlobKey(item.Id)}')");
+            }
+        }
 
         await SaveHistoryAsync();
     }
@@ -291,7 +418,7 @@
         try
         {
             var json = System.Text.Json.JsonSerializer.Serialize(
-                historyEntries.Select(e => new { j = e.Json, p = e.Path, t = e.Timestamp, m = e.MatchCount }));
+                historyEntries.Select(e => new { id = e.Id, p = e.Path, t = e.Timestamp, m = e.MatchCount, pr = e.JsonPreview }));
             await JS.InvokeVoidAsync("eval", $"localStorage.setItem('{LocalStorageHistoryKey}', `{json.Replace("\\", "\\\\").Replace("`", "\\`")}`)");
         }
         catch { }
@@ -308,15 +435,76 @@
             var parsed = System.Text.Json.JsonSerializer.Deserialize<List<System.Text.Json.JsonElement>>(raw);
             if (parsed is null) return;
 
-            historyEntries = parsed
-                .Select(e => new HistoryEntry(
-                    e.GetProperty("j").GetString() ?? "",
-                    e.GetProperty("p").GetString() ?? "",
-                    e.GetProperty("t").GetString() ?? "",
-                    e.GetProperty("m").GetInt32()))
-                .Where(e => !string.IsNullOrEmpty(e.Json) && !string.IsNullOrEmpty(e.Path))
-                .Take(MaxHistoryEntries)
-                .ToList();
+            var loadedEntries = new List<HistoryEntry>(MaxHistoryEntries);
+            var shouldSaveMetadata = parsed.Count > MaxHistoryEntries;
+
+            foreach (var element in parsed)
+            {
+                if (loadedEntries.Count >= MaxHistoryEntries)
+                {
+                    break;
+                }
+
+                var path = element.TryGetProperty("p", out var pProp) ? pProp.GetString() ?? "" : "";
+                if (string.IsNullOrEmpty(path))
+                {
+                    continue;
+                }
+
+                var timestamp = element.TryGetProperty("t", out var tProp) ? tProp.GetString() ?? "" : "";
+                var count = element.TryGetProperty("m", out var mProp) ? mProp.GetInt32() : 0;
+
+                if (element.TryGetProperty("id", out var idProp))
+                {
+                    var id = idProp.GetString() ?? Guid.NewGuid().ToString("N");
+                    var preview = element.TryGetProperty("pr", out var prProp) ? prProp.GetString() ?? "" : "";
+
+                    if (element.TryGetProperty("j", out var embeddedJsonProp))
+                    {
+                        var embeddedJson = embeddedJsonProp.GetString() ?? "";
+                        if (!string.IsNullOrEmpty(embeddedJson))
+                        {
+                            await JS.InvokeVoidAsync("eval",
+                                $"localStorage.setItem('{GetHistoryBlobKey(id)}', `{EscapeForTemplateLiteral(embeddedJson)}`)");
+
+                            if (string.IsNullOrEmpty(preview))
+                            {
+                                preview = embeddedJson.Length > 80 ? embeddedJson[..80] + "…" : embeddedJson;
+                            }
+
+                            shouldSaveMetadata = true;
+                        }
+                    }
+
+                    loadedEntries.Add(new HistoryEntry(id, path, timestamp, count, preview));
+                    continue;
+                }
+
+                var fallbackId = Guid.NewGuid().ToString("N");
+                var oldJson = element.TryGetProperty("j", out var jProp) ? jProp.GetString() ?? "" : "";
+
+                if (!string.IsNullOrEmpty(oldJson))
+                {
+                    await JS.InvokeVoidAsync("eval",
+                        $"localStorage.setItem('{GetHistoryBlobKey(fallbackId)}', `{EscapeForTemplateLiteral(oldJson)}`)");
+                }
+
+                loadedEntries.Add(new HistoryEntry(
+                    fallbackId,
+                    path,
+                    timestamp,
+                    count,
+                    oldJson.Length > 80 ? oldJson[..80] + "…" : oldJson));
+
+                shouldSaveMetadata = true;
+            }
+
+            historyEntries = loadedEntries;
+
+            if (shouldSaveMetadata)
+            {
+                await SaveHistoryAsync();
+            }
         }
         catch
         {
@@ -368,6 +556,73 @@
         await JS.InvokeVoidAsync("eval", "document.getElementById('fileInput').click()");
     }
 
+    private async Task FocusJsonEditorAsync()
+    {
+        try
+        {
+            await JS.InvokeVoidAsync("jsonPathPlus.focusElement", jsonEditorRef);
+        }
+        catch
+        {
+            // Ignore focus failures in browsers that block scripted focus.
+        }
+    }
+
+    private async Task SyncJsonEditorScrollAsync()
+    {
+        try
+        {
+            await JS.InvokeVoidAsync("jsonPathPlus.syncScroll", jsonEditorRef, jsonEditorGutterRef);
+
+            var scrollInfo = await JS.InvokeAsync<ScrollInfo>("jsonPathPlus.getScrollInfo", jsonEditorRef);
+            jsonEditorScrollTop = scrollInfo.ScrollTop;
+            jsonEditorClientHeight = scrollInfo.ClientHeight;
+            UpdateJsonEditorViewport();
+        }
+        catch
+        {
+            // Ignore scroll sync failures; the editor remains usable.
+        }
+    }
+
+    private async Task UpdateJsonEditorCursorStateAsync()
+    {
+        try
+        {
+            var line = await JS.InvokeAsync<int>("jsonPathPlus.getCaretLine", jsonEditorRef);
+            if (line > 0)
+            {
+                jsonEditorActiveLine = line;
+                StateHasChanged();
+            }
+        }
+        catch
+        {
+            // Ignore cursor tracking failures; editing still works.
+        }
+    }
+
+    private async Task HandleJsonEditorKeyDownAsync(KeyboardEventArgs e)
+    {
+        if (!string.Equals(e.Key, "Tab", StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        await JS.InvokeVoidAsync("jsonPathPlus.insertTab", jsonEditorRef);
+    }
+
+    private void UpdateJsonEditorViewport()
+    {
+        var firstVisible = Math.Max(1, (int)Math.Floor(jsonEditorScrollTop / JsonEditorLineHeightPx) - JsonEditorLineBuffer);
+        var visibleCount = Math.Max(
+            80,
+            (int)Math.Ceiling(jsonEditorClientHeight / JsonEditorLineHeightPx) + (JsonEditorLineBuffer * 2));
+
+        jsonEditorFirstVisibleLine = firstVisible;
+        jsonEditorVisibleLineCount = visibleCount;
+    }
+
     // ===== Evaluation Logic =====
     private void DebounceEvaluate()
     {
@@ -383,7 +638,9 @@
         if (string.IsNullOrWhiteSpace(_jsonInput) && string.IsNullOrWhiteSpace(_pathInput))
         {
             allMatches = new();
+            allMatchPaths = new();
             matchCount = 0;
+            RefreshResultDisplayText();
             return;
         }
 
@@ -404,6 +661,7 @@
             }
 
             allMatches = new();
+            allMatchPaths = new();
             matchCount = 0;
         }
         else
@@ -411,6 +669,7 @@
             jsonError = null;
             pathError = null;
             allMatches = result.AllMatches;
+            allMatchPaths = result.AllMatchPaths;
             matchCount = result.MatchCount;
 
             // Persist successful evaluation
@@ -418,12 +677,84 @@
             await AddHistoryEntryAsync();
         }
 
+        RefreshResultDisplayText();
         StateHasChanged();
     }
+
+    private void RefreshResultDisplayText()
+    {
+        resultDisplayText = BuildResultsDisplayText();
+        resultDisplayLines = resultDisplayText.Split('\n');
+        resultVisibleLineCount = Math.Min(ResultChunkSize, resultDisplayLines.Length);
+    }
+
+    private void LoadMoreResultLines()
+    {
+        if (!HasMoreResultLines)
+        {
+            return;
+        }
+
+        resultVisibleLineCount = Math.Min(resultVisibleLineCount + ResultChunkSize, resultDisplayLines.Length);
+    }
+
+    private static string EscapeForTemplateLiteral(string value)
+        => value.Replace("\\", "\\\\", StringComparison.Ordinal).Replace("`", "\\`", StringComparison.Ordinal);
+
+    private static string GetHistoryBlobKey(string historyId)
+        => $"{LocalStorageHistoryBlobPrefix}{historyId}";
 
     private static string PrettyPrintJson(JsonNode? node)
     {
         return JsonPathEvaluatorService.PrettyPrint(node);
+    }
+
+    private string BuildResultsDisplayText()
+    {
+        if (HasPathError && !string.IsNullOrEmpty(pathError))
+        {
+            return pathError;
+        }
+
+        if (showOutputPaths)
+        {
+            if (DisplayResultPaths.Any())
+            {
+                object outputPaths = showFirstOnly
+                    ? DisplayResultPaths.First()
+                    : DisplayResultPaths.ToList();
+                return JsonSerializer.Serialize(outputPaths, new JsonSerializerOptions { WriteIndented = true });
+            }
+
+            return "[]";
+        }
+
+        if (HasResults)
+        {
+            if (showFirstOnly)
+            {
+                return PrettyPrintJson(DisplayResults.FirstOrDefault());
+            }
+
+            var prettyMatches = DisplayResults
+                .Select(PrettyPrintJson)
+                .Select(text => IndentBlock(text, 2));
+
+            return "[\n" + string.Join(",\n", prettyMatches) + "\n]";
+        }
+
+        return "No matches found";
+    }
+
+    private static string IndentBlock(string value, int spaces)
+    {
+        if (string.IsNullOrEmpty(value))
+        {
+            return value;
+        }
+
+        var indent = new string(' ', spaces);
+        return string.Join("\n", value.Split('\n').Select(line => indent + line));
     }
 
     // ===== URL Hash State Restore =====
@@ -490,7 +821,7 @@
     <div class="evaluator-title">
         <span class="icon">&#x1F50D;</span>
         <span>JsonPathPlus Online Evaluator</span>
-        <span class="version">v1.0.0</span>
+        <span class="version">v1.1.0</span>
     </div>
     <div class="header-actions">
         <button class="btn @(showHistory ? "active" : "")" @onclick="ToggleHistory" title="Evaluation history">
@@ -586,12 +917,28 @@
             </button>
         </div>
         <div class="panel-body">
-            <textarea class="@(HasJsonError ? "error" : "")"
-                      @bind-value="jsonInput"
-                      @bind-value:event="oninput"
-                      placeholder="Paste your JSON document here..."
-                      spellcheck="false">
-            </textarea>
+            <div class="editor-surface editor-shell @(HasJsonError ? "error" : "")" @onclick="FocusJsonEditorAsync">
+                <div class="editor-gutter" @ref="jsonEditorGutterRef" aria-hidden="true">
+                    <div class="editor-gutter-content" style="padding-top:@($"{JsonEditorTopPaddingPx}px"); padding-bottom:@($"{JsonEditorBottomPaddingPx}px")">
+                        @foreach (var lineNumber in JsonEditorVisibleLineNumbers)
+                        {
+                            <div class="editor-line-number @(lineNumber == jsonEditorActiveLine ? "active" : "")">@lineNumber</div>
+                        }
+                    </div>
+                </div>
+                <textarea class="editor-input"
+                          @ref="jsonEditorRef"
+                          @bind-value="jsonInput"
+                          @bind-value:event="oninput"
+                          @onscroll="SyncJsonEditorScrollAsync"
+                          @onkeydown="HandleJsonEditorKeyDownAsync"
+                          @onkeyup="UpdateJsonEditorCursorStateAsync"
+                          @onmouseup="UpdateJsonEditorCursorStateAsync"
+                          @onfocus="UpdateJsonEditorCursorStateAsync"
+                          placeholder="Paste your JSON document here..."
+                          spellcheck="false">
+                </textarea>
+            </div>
         </div>
         @if (HasJsonError && !string.IsNullOrEmpty(jsonError))
         {
@@ -600,40 +947,32 @@
     </div>
 
     @* Right: Evaluation Results *@
-    <div class="panel">
+    <div class="panel results-panel">
         <div class="panel-header">
-            <span>Evaluation Results</span>
-            <span class="match-count @(matchCount == 0 ? "zero" : "")">
-                @matchCount match@(matchCount == 1 ? "" : "es")
-            </span>
+            <span>@(ShowOutputPaths ? "Output Paths" : "Evaluation Results")</span>
+            <div class="panel-header-actions">
+                <label class="header-toggle" title="Show JSONPath locations instead of matched values">
+                    <input type="checkbox" @bind="ShowOutputPaths" />
+                    <span>Output Paths</span>
+                </label>
+                <span class="match-count @(matchCount == 0 ? "zero" : "")">
+                    @matchCount match@(matchCount == 1 ? "" : "es")
+                </span>
+            </div>
         </div>
         <div class="panel-body">
-            @if (HasPathError && !string.IsNullOrEmpty(pathError))
+            @if (HasTyped || HasPathError)
             {
-                <div class="result-display" style="color: var(--color-error); white-space: pre-wrap;">
-                    @pathError
+                <div class="editor-surface result-surface @(HasPathError ? "error" : "")">
+                    <pre class="editor-output">@VisibleResultDisplayText</pre>
                 </div>
-            }
-            else if (HasResults)
-            {
-                <div class="result-display">
-                    @foreach (var (node, index) in DisplayResults.Select((n, i) => (n, i)))
-                    {
-                        <div class="result-item">
-                            @if (!showFirstOnly)
-                            {
-                                <div class="result-index">Match @(index + 1)</div>
-                            }
-                            @PrettyPrintJson(node)
-                        </div>
-                    }
-                </div>
-            }
-            else if (HasTyped)
-            {
-                <div class="result-display" style="color: var(--color-text-secondary); display: flex; align-items: center; justify-content: center; height: 100%;">
-                    No matches found
-                </div>
+
+                @if (HasMoreResultLines)
+                {
+                    <button class="btn result-load-more" @onclick="LoadMoreResultLines" title="Load more lines from local result data">
+                        Load More
+                    </button>
+                }
             }
             else
             {
