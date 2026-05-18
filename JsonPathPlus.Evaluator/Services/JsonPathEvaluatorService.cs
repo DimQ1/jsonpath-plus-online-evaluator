@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -69,12 +70,14 @@ public class JsonPathEvaluatorService
             // Note: The Stream extension methods will throw on invalid path,
             // so we use try/catch to provide user-friendly errors
             var allMatches = new List<JsonNode?>();
-            var allMatchPaths = new List<string>();
-            await foreach (var match in stream.ExtractAllJsonMatchesWithPathsAsync(trimmedPath))
+            await foreach (var match in stream.ExtractAllJsonMatchesAsync(trimmedPath))
             {
-                allMatches.Add(match.Value);
-                allMatchPaths.Add(match.Path);
+                allMatches.Add(match);
             }
+
+            // JsonPathPlus public API does not return concrete paths for each match,
+            // so use the evaluated expression for display context.
+            var allMatchPaths = Enumerable.Repeat(trimmedPath, allMatches.Count).ToList();
 
             return new EvaluationResult(
                 allMatches,
