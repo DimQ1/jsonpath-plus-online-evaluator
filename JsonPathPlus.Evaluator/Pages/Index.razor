@@ -83,6 +83,26 @@
     private bool showToast;
     private string toastMessage = "";
     private Timer? debounceTimer;
+    private bool showHistory;
+
+    // ===== History Model =====
+    private sealed record HistoryEntry(
+        string Json,
+        string Path,
+        string Timestamp,
+        int MatchCount)
+    {
+        public string DisplayText =>
+            $"{Path} → {MatchCount} match{(MatchCount == 1 ? "" : "es")}";
+
+        public string ShortJson =>
+            Json.Length > 80 ? Json[..80] + "…" : Json;
+    }
+
+    private List<HistoryEntry> historyEntries = new();
+    private const int MaxHistoryEntries = 20;
+    private const string LocalStorageStateKey = "jpplus_state";
+    private const string LocalStorageHistoryKey = "jpplus_history";
 
     // ===== Properties with Debounced Evaluation =====
     private string jsonInput
@@ -123,10 +143,21 @@
     // ===== Lifecycle =====
     protected override async Task OnInitializedAsync()
     {
-        await TryRestoreFromHashAsync();
+        // Priority: URL hash > localStorage > sample defaults
+        var restoredFromHash = await TryRestoreFromHashAsync();
+        if (!restoredFromHash)
+        {
+            var restoredFromStorage = await TryRestoreFromLocalStorageAsync();
+            if (restoredFromStorage)
+            {
+                hasTyped = true;
+            }
+        }
+
+        await LoadHistoryAsync();
+
         if (!hasTyped)
         {
-            // Preload sample evaluation
             await EvaluateAsync();
         }
     }
@@ -156,11 +187,141 @@
         hasTyped = false;
         allMatches = new();
         matchCount = 0;
+        showHistory = false;
 
         // Clear URL hash
         await JS.InvokeVoidAsync("eval", "history.replaceState(null, '', window.location.pathname);");
         await EvaluateAsync();
         StateHasChanged();
+    }
+
+    private void ToggleHistory()
+    {
+        showHistory = !showHistory;
+    }
+
+    private async Task RestoreFromHistory(HistoryEntry entry)
+    {
+        _jsonInput = entry.Json;
+        _pathInput = entry.Path;
+        jsonError = null;
+        pathError = null;
+        hasTyped = true;
+        showHistory = false;
+        StateHasChanged();
+        await EvaluateAsync();
+    }
+
+    private async Task ClearHistoryAsync()
+    {
+        historyEntries.Clear();
+        await JS.InvokeVoidAsync("eval", $"localStorage.removeItem('{LocalStorageHistoryKey}')");
+        showHistory = false;
+        ShowToast("History cleared");
+    }
+
+    // ===== LocalStorage Persistence =====
+    private async Task SaveToLocalStorageAsync()
+    {
+        try
+        {
+            var state = System.Text.Json.JsonSerializer.Serialize(new
+            {
+                json = _jsonInput,
+                path = _pathInput
+            });
+            await JS.InvokeVoidAsync("eval", $"localStorage.setItem('{LocalStorageStateKey}', `{state.Replace("\\", "\\\\").Replace("`", "\\`")}`)");
+        }
+        catch { /* localStorage may be unavailable */ }
+    }
+
+    private async Task<bool> TryRestoreFromLocalStorageAsync()
+    {
+        try
+        {
+            var state = await JS.InvokeAsync<string>("eval", $"localStorage.getItem('{LocalStorageStateKey}')");
+            if (string.IsNullOrEmpty(state))
+                return false;
+
+            var parsed = System.Text.Json.JsonSerializer.Deserialize<System.Text.Json.JsonElement>(state);
+            var json = parsed.GetProperty("json").GetString();
+            var path = parsed.GetProperty("path").GetString();
+
+            if (!string.IsNullOrEmpty(json))
+            {
+                _jsonInput = json;
+            }
+            if (!string.IsNullOrEmpty(path))
+            {
+                _pathInput = path;
+            }
+            return !string.IsNullOrEmpty(json) && !string.IsNullOrEmpty(path);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    // ===== History Persistence =====
+    private async Task AddHistoryEntryAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_jsonInput) || string.IsNullOrWhiteSpace(_pathInput))
+            return;
+
+        // Remove duplicate (same json + path)
+        historyEntries.RemoveAll(e => e.Json == _jsonInput && e.Path == _pathInput);
+
+        // Add to front
+        historyEntries.Insert(0, new HistoryEntry(
+            _jsonInput,
+            _pathInput,
+            DateTime.Now.ToString("HH:mm:ss"),
+            matchCount));
+
+        // Trim
+        if (historyEntries.Count > MaxHistoryEntries)
+            historyEntries = historyEntries.Take(MaxHistoryEntries).ToList();
+
+        await SaveHistoryAsync();
+    }
+
+    private async Task SaveHistoryAsync()
+    {
+        try
+        {
+            var json = System.Text.Json.JsonSerializer.Serialize(
+                historyEntries.Select(e => new { j = e.Json, p = e.Path, t = e.Timestamp, m = e.MatchCount }));
+            await JS.InvokeVoidAsync("eval", $"localStorage.setItem('{LocalStorageHistoryKey}', `{json.Replace("\\", "\\\\").Replace("`", "\\`")}`)");
+        }
+        catch { }
+    }
+
+    private async Task LoadHistoryAsync()
+    {
+        try
+        {
+            var raw = await JS.InvokeAsync<string>("eval", $"localStorage.getItem('{LocalStorageHistoryKey}')");
+            if (string.IsNullOrEmpty(raw))
+                return;
+
+            var parsed = System.Text.Json.JsonSerializer.Deserialize<List<System.Text.Json.JsonElement>>(raw);
+            if (parsed is null) return;
+
+            historyEntries = parsed
+                .Select(e => new HistoryEntry(
+                    e.GetProperty("j").GetString() ?? "",
+                    e.GetProperty("p").GetString() ?? "",
+                    e.GetProperty("t").GetString() ?? "",
+                    e.GetProperty("m").GetInt32()))
+                .Where(e => !string.IsNullOrEmpty(e.Json) && !string.IsNullOrEmpty(e.Path))
+                .Take(MaxHistoryEntries)
+                .ToList();
+        }
+        catch
+        {
+            historyEntries = new();
+        }
     }
 
     private async Task ShareAsync()
@@ -251,6 +412,10 @@
             pathError = null;
             allMatches = result.AllMatches;
             matchCount = result.MatchCount;
+
+            // Persist successful evaluation
+            await SaveToLocalStorageAsync();
+            await AddHistoryEntryAsync();
         }
 
         StateHasChanged();
@@ -262,13 +427,13 @@
     }
 
     // ===== URL Hash State Restore =====
-    private async Task TryRestoreFromHashAsync()
+    private async Task<bool> TryRestoreFromHashAsync()
     {
         try
         {
             var hash = await JS.InvokeAsync<string>("eval", "window.location.hash");
             if (string.IsNullOrEmpty(hash) || !hash.StartsWith("#json="))
-                return;
+                return false;
 
             hash = hash.TrimStart('#');
             var parts = hash.Split('&');
@@ -293,10 +458,11 @@
                 _pathInput = pathPart;
                 hasTyped = true;
             }
+            return true;
         }
         catch
         {
-            // Ignore hash parse errors; use defaults
+            return false;
         }
     }
 
@@ -327,6 +493,13 @@
         <span class="version">v1.0.0</span>
     </div>
     <div class="header-actions">
+        <button class="btn @(showHistory ? "active" : "")" @onclick="ToggleHistory" title="Evaluation history">
+            <span>&#x1F552;</span> History
+            @if (historyEntries.Count > 0)
+            {
+                <span class="badge">@historyEntries.Count</span>
+            }
+        </button>
         <button class="btn" @onclick="ResetAsync" title="Clear inputs and reset to sample">
             <span>&#x21BA;</span> Reset
         </button>
@@ -341,6 +514,42 @@
         </a>
     </div>
 </div>
+
+@* ========== HISTORY PANEL ========== *@
+@if (showHistory)
+{
+    <div class="history-panel">
+        <div class="history-header">
+            <span>Evaluation History</span>
+            @if (historyEntries.Count > 0)
+            {
+                <button class="btn" @onclick="ClearHistoryAsync" title="Clear all history">
+                    <span>&#x1F5D1;</span> Clear
+                </button>
+            }
+        </div>
+        <div class="history-list">
+            @if (historyEntries.Count == 0)
+            {
+                <div class="history-empty">No history yet. Evaluate some expressions to see them here.</div>
+            }
+            else
+            {
+                @foreach (var entry in historyEntries)
+                {
+                    <div class="history-item" @onclick="() => RestoreFromHistory(entry)" title="Restore this evaluation">
+                        <div class="history-item-path">@entry.Path</div>
+                        <div class="history-item-meta">
+                            <span class="history-item-count">@entry.MatchCount match@(entry.MatchCount == 1 ? "" : "es")</span>
+                            <span class="history-item-time">@entry.Timestamp</span>
+                        </div>
+                        <div class="history-item-preview">@entry.ShortJson</div>
+                    </div>
+                }
+            }
+        </div>
+    </div>
+}
 
 @* ========== PATH INPUT BAR ========== *@
 <div class="path-input-bar">

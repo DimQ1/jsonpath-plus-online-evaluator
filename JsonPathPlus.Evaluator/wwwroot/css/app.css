@@ -117,6 +117,103 @@ html, body {
     gap: 8px;
 }
 
+.btn .badge {
+    background: var(--color-primary);
+    color: white;
+    font-size: 10px;
+    font-weight: 600;
+    padding: 1px 6px;
+    border-radius: 8px;
+    min-width: 18px;
+    text-align: center;
+}
+
+/* ===== History Panel ===== */
+.history-panel {
+    background: var(--color-surface);
+    border-bottom: 1px solid var(--color-border);
+    max-height: 300px;
+    display: flex;
+    flex-direction: column;
+}
+
+.history-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 24px;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--color-text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    border-bottom: 1px solid var(--color-border);
+}
+
+.history-list {
+    overflow-y: auto;
+    flex: 1;
+}
+
+.history-empty {
+    padding: 24px;
+    text-align: center;
+    color: var(--color-text-secondary);
+    font-size: 13px;
+}
+
+.history-item {
+    padding: 10px 24px;
+    border-bottom: 1px solid var(--color-border);
+    cursor: pointer;
+    transition: background 0.1s;
+}
+
+.history-item:hover {
+    background: #f0f4ff;
+}
+
+.history-item:last-child {
+    border-bottom: none;
+}
+
+.history-item-path {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--color-primary);
+    margin-bottom: 4px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.history-item-meta {
+    display: flex;
+    gap: 12px;
+    font-size: 11px;
+    color: var(--color-text-secondary);
+    margin-bottom: 2px;
+}
+
+.history-item-count {
+    font-weight: 600;
+    color: var(--color-success);
+}
+
+.history-item-time {
+    color: var(--color-text-secondary);
+}
+
+.history-item-preview {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--color-text-secondary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    opacity: 0.7;
+}
+
 /* ===== Buttons ===== */
 .btn {
     display: inline-flex;
