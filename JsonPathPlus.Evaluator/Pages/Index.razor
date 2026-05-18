@@ -112,21 +112,16 @@
         string Id,
         string Path,
         string Timestamp,
-        int MatchCount,
-        string JsonPreview,
-        string? Json = null)
+        int MatchCount)
     {
         public string DisplayText =>
             $"{Path} → {MatchCount} match{(MatchCount == 1 ? "" : "es")}";
-
-        public string ShortJson => JsonPreview;
     }
 
     private List<HistoryEntry> historyEntries = new();
     private const int MaxHistoryEntries = 20;
     private const string LocalStorageStateKey = "jpplus_state";
     private const string LocalStorageHistoryKey = "jpplus_history";
-    private const string LocalStorageHistoryBlobPrefix = "jpplus_history_json_";
 
     // ===== Properties with Debounced Evaluation =====
     private string jsonInput
@@ -281,44 +276,18 @@
 
     private async Task RestoreFromHistory(HistoryEntry entry)
     {
-        var json = entry.Json;
-        if (string.IsNullOrEmpty(json))
-        {
-            json = await JS.InvokeAsync<string>("eval", $"localStorage.getItem('{GetHistoryBlobKey(entry.Id)}')");
-        }
-
-        if (string.IsNullOrEmpty(json))
-        {
-            ShowToast("History entry payload is missing.");
-            return;
-        }
-
-        _jsonInput = json;
-        await SetJsonEditorValueAsync(_jsonInput);
         _pathInput = entry.Path;
         await SetPathInputValueAsync(_pathInput);
-        jsonError = null;
         pathError = null;
         hasTyped = true;
         showHistory = false;
 
-        var idx = historyEntries.FindIndex(h => h.Id == entry.Id);
-        if (idx >= 0 && historyEntries[idx].Json is null)
-        {
-            historyEntries[idx] = historyEntries[idx] with { Json = json };
-        }
-
         StateHasChanged();
-        await RequestEvaluationAsync();
+        await RequestEvaluationAsync(persistResult: false);
     }
 
     private async Task ClearHistoryAsync()
     {
-        foreach (var entry in historyEntries)
-        {
-            await JS.InvokeVoidAsync("eval", $"localStorage.removeItem('{GetHistoryBlobKey(entry.Id)}')");
-        }
-
         historyEntries.Clear();
         await JS.InvokeVoidAsync("eval", $"localStorage.removeItem('{LocalStorageHistoryKey}')");
         showHistory = false;
@@ -371,101 +340,28 @@
     // ===== History Persistence =====
     private async Task AddHistoryEntryAsync()
     {
-        if (string.IsNullOrWhiteSpace(_jsonInput) || string.IsNullOrWhiteSpace(_pathInput))
+        if (string.IsNullOrWhiteSpace(_pathInput) || !IsPathValid(_pathInput))
             return;
 
-        var preview = _jsonInput.Length > 80 ? _jsonInput[..80] + "…" : _jsonInput;
-
-        // Remove duplicate (same path + preview)
-        var duplicateIds = historyEntries
-            .Where(e => e.Path == _pathInput && e.JsonPreview == preview)
-            .Select(e => e.Id)
-            .ToList();
-
-        historyEntries.RemoveAll(e => e.Path == _pathInput && e.JsonPreview == preview);
-
-        foreach (var duplicateId in duplicateIds)
-        {
-            await RemoveHistoryBlobAsync(duplicateId);
-        }
+        // Remove duplicate query
+        historyEntries.RemoveAll(e => e.Path == _pathInput);
 
         var entryId = Guid.NewGuid().ToString("N");
-        if (!await TryPersistHistoryBlobAsync(entryId, _jsonInput))
-        {
-            ShowToast("History storage is full. Older entries were removed if possible.");
-            return;
-        }
 
         // Add to front
         historyEntries.Insert(0, new HistoryEntry(
             entryId,
             _pathInput,
             DateTime.Now.ToString("HH:mm:ss"),
-            matchCount,
-            preview));
+            matchCount));
 
         // Trim
         if (historyEntries.Count > MaxHistoryEntries)
         {
-            var removed = historyEntries.Skip(MaxHistoryEntries).ToList();
             historyEntries = historyEntries.Take(MaxHistoryEntries).ToList();
-
-            foreach (var item in removed)
-            {
-                await RemoveHistoryBlobAsync(item.Id);
-            }
         }
 
         await SaveHistoryAsync();
-    }
-
-    private async Task<bool> TryPersistHistoryBlobAsync(string historyId, string json)
-    {
-        var storageValue = EscapeForTemplateLiteral(json);
-
-        if (await TrySetLocalStorageItemAsync(GetHistoryBlobKey(historyId), storageValue))
-        {
-            return true;
-        }
-
-        while (historyEntries.Count > 0)
-        {
-            var removedEntry = historyEntries[^1];
-            historyEntries.RemoveAt(historyEntries.Count - 1);
-            await RemoveHistoryBlobAsync(removedEntry.Id);
-
-            if (await TrySetLocalStorageItemAsync(GetHistoryBlobKey(historyId), storageValue))
-            {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    private async Task<bool> TrySetLocalStorageItemAsync(string key, string value)
-    {
-        try
-        {
-            await JS.InvokeVoidAsync("eval", $"localStorage.setItem('{key}', `{value}`)");
-            return true;
-        }
-        catch
-        {
-            return false;
-        }
-    }
-
-    private async Task RemoveHistoryBlobAsync(string historyId)
-    {
-        try
-        {
-            await JS.InvokeVoidAsync("eval", $"localStorage.removeItem('{GetHistoryBlobKey(historyId)}')");
-        }
-        catch
-        {
-            // Ignore storage cleanup failures.
-        }
     }
 
     private async Task SaveHistoryAsync()
@@ -473,7 +369,7 @@
         try
         {
             var json = System.Text.Json.JsonSerializer.Serialize(
-                historyEntries.Select(e => new { id = e.Id, p = e.Path, t = e.Timestamp, m = e.MatchCount, pr = e.JsonPreview }));
+                historyEntries.Select(e => new { id = e.Id, p = e.Path, t = e.Timestamp, m = e.MatchCount }));
             await JS.InvokeVoidAsync("eval", $"localStorage.setItem('{LocalStorageHistoryKey}', `{json.Replace("\\", "\\\\").Replace("`", "\\`")}`)");
         }
         catch { }
@@ -512,44 +408,24 @@
                 if (element.TryGetProperty("id", out var idProp))
                 {
                     var id = idProp.GetString() ?? Guid.NewGuid().ToString("N");
-                    var preview = element.TryGetProperty("pr", out var prProp) ? prProp.GetString() ?? "" : "";
 
-                    if (element.TryGetProperty("j", out var embeddedJsonProp))
+                    // Migrate legacy history entries that embedded source payloads.
+                    if (element.TryGetProperty("j", out _)
+                        || element.TryGetProperty("pr", out _))
                     {
-                        var embeddedJson = embeddedJsonProp.GetString() ?? "";
-                        if (!string.IsNullOrEmpty(embeddedJson))
-                        {
-                            await JS.InvokeVoidAsync("eval",
-                                $"localStorage.setItem('{GetHistoryBlobKey(id)}', `{EscapeForTemplateLiteral(embeddedJson)}`)");
-
-                            if (string.IsNullOrEmpty(preview))
-                            {
-                                preview = embeddedJson.Length > 80 ? embeddedJson[..80] + "…" : embeddedJson;
-                            }
-
-                            shouldSaveMetadata = true;
-                        }
+                        shouldSaveMetadata = true;
                     }
 
-                    loadedEntries.Add(new HistoryEntry(id, path, timestamp, count, preview));
+                    loadedEntries.Add(new HistoryEntry(id, path, timestamp, count));
                     continue;
                 }
 
                 var fallbackId = Guid.NewGuid().ToString("N");
-                var oldJson = element.TryGetProperty("j", out var jProp) ? jProp.GetString() ?? "" : "";
-
-                if (!string.IsNullOrEmpty(oldJson))
-                {
-                    await JS.InvokeVoidAsync("eval",
-                        $"localStorage.setItem('{GetHistoryBlobKey(fallbackId)}', `{EscapeForTemplateLiteral(oldJson)}`)");
-                }
-
                 loadedEntries.Add(new HistoryEntry(
                     fallbackId,
                     path,
                     timestamp,
-                    count,
-                    oldJson.Length > 80 ? oldJson[..80] + "…" : oldJson));
+                    count));
 
                 shouldSaveMetadata = true;
             }
@@ -733,6 +609,19 @@
         }
 
         JsonPathWorkerEvaluationResult result;
+
+        if (!TryValidatePath(out var pathValidationError))
+        {
+            jsonError = null;
+            pathError = pathValidationError;
+            allMatchTexts = new();
+            allMatchPaths = new();
+            matchCount = 0;
+            RefreshResultDisplayText();
+            await UpdateJsonErrorMarkerAsync(null, null, null);
+            StateHasChanged();
+            return;
+        }
 
         if (!jsonChangedSinceLastEvaluation && !lastJsonWasValid)
         {
@@ -920,6 +809,32 @@
         return RequestEvaluationAsync(persistResult: false);
     }
 
+    private bool TryValidatePath(out string? error)
+    {
+        var normalizedPath = string.IsNullOrWhiteSpace(_pathInput)
+            ? "$"
+            : _pathInput.Trim();
+
+        var validation = JsonPathValidator.Validate(normalizedPath);
+        if (!validation.IsValid)
+        {
+            error = $"Invalid JSONPath expression: {validation.Error}";
+            return false;
+        }
+
+        error = null;
+        return true;
+    }
+
+    private static bool IsPathValid(string? path)
+    {
+        var normalizedPath = string.IsNullOrWhiteSpace(path)
+            ? "$"
+            : path.Trim();
+
+        return JsonPathValidator.IsValid(normalizedPath);
+    }
+
     private static bool IsJsonValidationError(JsonPathWorkerEvaluationResult result)
         => result.JsonErrorLine.HasValue
             || result.JsonErrorColumn.HasValue
@@ -927,12 +842,6 @@
 
     private static bool IsWorkerCancellation(JSException exception)
         => exception.Message.Contains("EvaluationCanceled", StringComparison.Ordinal);
-
-    private static string EscapeForTemplateLiteral(string value)
-        => value.Replace("\\", "\\\\", StringComparison.Ordinal).Replace("`", "\\`", StringComparison.Ordinal);
-
-    private static string GetHistoryBlobKey(string historyId)
-        => $"{LocalStorageHistoryBlobPrefix}{historyId}";
 
     private string BuildResultsDisplayText()
     {
@@ -1146,7 +1055,6 @@
                                     <span class="history-item-count">@entry.MatchCount match@(entry.MatchCount == 1 ? "" : "es")</span>
                                     <span class="history-item-time">@entry.Timestamp</span>
                                 </div>
-                                <div class="history-item-preview">@entry.ShortJson</div>
                             </div>
                         }
                     }

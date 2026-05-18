@@ -66,6 +66,16 @@ public class JsonPathEvaluatorService
 
         // Handle null/root path: return entire document
         var trimmedPath = string.IsNullOrWhiteSpace(path) ? "$" : path.Trim();
+        var pathValidation = JsonPathValidator.Validate(trimmedPath);
+        if (!pathValidation.IsValid)
+        {
+            return new EvaluationResult(
+                new List<JsonNode?>(),
+                new List<string>(),
+                $"Invalid JSONPath expression: {pathValidation.Error}",
+                0);
+        }
+
         if (trimmedPath == "$")
         {
             var root = JsonNode.Parse(json);

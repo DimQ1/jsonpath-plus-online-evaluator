@@ -489,6 +489,54 @@ html, body {
     min-height: 0;
 }
 
+.jsonpath-hover-actions {
+    display: flex;
+    justify-content: flex-end;
+    margin: 0 0 6px;
+}
+
+.jsonpath-hover-copy-button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 4px 10px;
+    font-size: 12px;
+    font-family: inherit;
+    border: 1px solid var(--color-border);
+    border-radius: 6px;
+    background: var(--color-surface);
+    color: var(--color-text);
+    cursor: pointer;
+    transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+
+.jsonpath-hover-copy-button:hover {
+    background: #f0f0f0;
+    border-color: #bbb;
+}
+
+.jsonpath-hover-copy-button[data-state="copied"] {
+    background: rgba(22, 163, 74, 0.1);
+    border-color: rgba(22, 163, 74, 0.35);
+    color: var(--color-success);
+}
+
+.jsonpath-hover-copy-button[data-state="failed"] {
+    background: rgba(220, 38, 38, 0.08);
+    border-color: rgba(220, 38, 38, 0.3);
+    color: var(--color-error);
+}
+
+.jsonpath-hover-value {
+    font-family: var(--font-mono);
+    font-size: 13px;
+    line-height: 1.5;
+    color: var(--color-text);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    margin-top: 2px;
+}
+
 .editor-shell {
     display: grid;
     grid-template-columns: 4.5rem minmax(0, 1fr);

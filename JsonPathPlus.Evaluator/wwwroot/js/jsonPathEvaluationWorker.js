@@ -3,7 +3,9 @@ import { dotnet } from '../_framework/dotnet.js';
 let assemblyExportsPromise = initializeWorkerAsync();
 
 async function initializeWorkerAsync() {
-    const { getAssemblyExports, getConfig } = await dotnet.create();
+    const { getAssemblyExports, getConfig } = await dotnet
+        .withDebugging(0)
+        .create();
     const config = getConfig();
     const assemblyExports = await getAssemblyExports(config.mainAssemblyName);
     self.postMessage({ command: 'ready' });

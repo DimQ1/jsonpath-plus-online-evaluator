@@ -2,6 +2,9 @@
     var monacoBaseUrl = 'https://cdn.jsdelivr.net/npm/monaco-editor@0.52.2/min/vs';
     var monacoReadyPromise = null;
     var hoverRegistration = null;
+    var hoverEnhancerObserver = null;
+    var hoverEnhancerFrame = 0;
+    var hoverInteractionHandlersAttached = false;
     var pathInputElement = null;
     var pathInputTimer = null;
     var pathInputHandler = null;
@@ -14,6 +17,362 @@
     var dotNetReference = null;
     var suppressJsonChange = false;
     var suppressPathInputChange = false;
+    var contextMenuObserver = null;
+
+    function hideChangeAllOccurrencesMenuItem() {
+        var targets = document.querySelectorAll('div, span, a, li');
+        for (var i = 0; i < targets.length; i++) {
+            var node = targets[i];
+            var text = (node && node.textContent ? node.textContent : '').trim();
+            if (!text || text !== 'Change All Occurrences') {
+                continue;
+            }
+
+            var item = node.closest
+                ? node.closest('li, [role="menuitem"], .action-item, .monaco-action-bar .action-item')
+                : null;
+
+            if (!item) {
+                item = node.parentElement || node;
+            }
+
+            item.style.display = 'none';
+            item.setAttribute('aria-hidden', 'true');
+        }
+    }
+
+    function scheduleHideChangeAllOccurrencesMenuItem() {
+        window.setTimeout(hideChangeAllOccurrencesMenuItem, 0);
+        window.setTimeout(hideChangeAllOccurrencesMenuItem, 40);
+    }
+
+    function ensureContextMenuFilter() {
+        if (contextMenuObserver) {
+            return;
+        }
+
+        contextMenuObserver = new MutationObserver(function () {
+            hideChangeAllOccurrencesMenuItem();
+        });
+
+        contextMenuObserver.observe(document.body, { childList: true, subtree: true });
+        hideChangeAllOccurrencesMenuItem();
+    }
+
+    function disposeContextMenuFilter() {
+        if (!contextMenuObserver) {
+            return;
+        }
+
+        contextMenuObserver.disconnect();
+        contextMenuObserver = null;
+    }
+
+    function scheduleHoverEnhancement() {
+        if (hoverEnhancerFrame) {
+            return;
+        }
+
+        hoverEnhancerFrame = window.requestAnimationFrame(function () {
+            hoverEnhancerFrame = 0;
+            enhanceVisibleJsonPathHover();
+        });
+    }
+
+    function ensureHoverEnhancer() {
+        if (hoverEnhancerObserver) {
+            return;
+        }
+
+        ensureHoverInteractionHandlers();
+
+        hoverEnhancerObserver = new MutationObserver(function () {
+            scheduleHoverEnhancement();
+        });
+
+        hoverEnhancerObserver.observe(document.body, {
+            childList: true,
+            subtree: true,
+            attributes: true,
+            attributeFilter: ['class']
+        });
+
+        scheduleHoverEnhancement();
+    }
+
+    function disposeHoverEnhancer() {
+        if (hoverEnhancerFrame) {
+            window.cancelAnimationFrame(hoverEnhancerFrame);
+            hoverEnhancerFrame = 0;
+        }
+
+        disposeHoverInteractionHandlers();
+
+        if (!hoverEnhancerObserver) {
+            return;
+        }
+
+        hoverEnhancerObserver.disconnect();
+        hoverEnhancerObserver = null;
+    }
+
+    function ensureHoverInteractionHandlers() {
+        if (hoverInteractionHandlersAttached) {
+            return;
+        }
+
+        document.addEventListener('pointerdown', onDelegatedJsonPathCopyPointerDown, true);
+        document.addEventListener('click', onDelegatedJsonPathCopyClicked, true);
+        hoverInteractionHandlersAttached = true;
+    }
+
+    function disposeHoverInteractionHandlers() {
+        if (!hoverInteractionHandlersAttached) {
+            return;
+        }
+
+        document.removeEventListener('pointerdown', onDelegatedJsonPathCopyPointerDown, true);
+        document.removeEventListener('click', onDelegatedJsonPathCopyClicked, true);
+        hoverInteractionHandlersAttached = false;
+    }
+
+    function onDelegatedJsonPathCopyPointerDown(event) {
+        var button = getJsonPathCopyButton(event.target);
+        if (!button) {
+            return;
+        }
+
+        handleJsonPathCopyInteraction(event, true, button);
+    }
+
+    function onDelegatedJsonPathCopyClicked(event) {
+        var button = getJsonPathCopyButton(event.target);
+        if (!button) {
+            return;
+        }
+
+        handleJsonPathCopyInteraction(event, false, button);
+    }
+
+    function getJsonPathCopyButton(target) {
+        if (!target || !target.closest) {
+            return null;
+        }
+
+        return target.closest('.jsonpath-hover-copy-button');
+    }
+
+    function enhanceVisibleJsonPathHover() {
+        var visibleHovers = document.querySelectorAll('.monaco-hover:not(.hidden) .hover-row-contents');
+        for (var i = 0; i < visibleHovers.length; i++) {
+            var hoverContents = visibleHovers[i];
+            var title = hoverContents.querySelector('.markdown-hover .hover-contents .rendered-markdown p strong');
+            if (!title) {
+                continue;
+            }
+
+            var titleText = (title.textContent || '').trim();
+            if (titleText !== 'JsonPath' && titleText !== 'Normalized Path') {
+                continue;
+            }
+
+            title.textContent = 'JsonPath';
+
+            var titleHover = title.closest('.markdown-hover');
+
+            var codeContainer = hoverContents.querySelector('.code-hover-contents .rendered-markdown');
+            if (!codeContainer) {
+                continue;
+            }
+
+            var jsonPath = (codeContainer.textContent || '').trim();
+            if (!jsonPath) {
+                continue;
+            }
+
+            var actionRow = hoverContents.querySelector('.jsonpath-hover-actions');
+            if (!actionRow) {
+                actionRow = document.createElement('div');
+                actionRow.className = 'jsonpath-hover-actions';
+
+                var copyButton = document.createElement('button');
+                copyButton.type = 'button';
+                copyButton.className = 'jsonpath-hover-copy-button';
+                copyButton.textContent = 'Copy';
+
+                actionRow.appendChild(copyButton);
+            }
+
+            var button = actionRow.querySelector('.jsonpath-hover-copy-button');
+            if (button) {
+                button.dataset.jsonPath = jsonPath;
+            }
+
+            var pathValue = hoverContents.querySelector('.jsonpath-hover-value');
+            if (!pathValue) {
+                pathValue = document.createElement('div');
+                pathValue.className = 'jsonpath-hover-value';
+            }
+
+            var codeHover = codeContainer.closest('.markdown-hover');
+            if (codeHover) {
+                codeHover.style.display = 'none';
+            }
+
+            pathValue.textContent = jsonPath;
+
+            if (actionRow.parentNode !== hoverContents) {
+                hoverContents.appendChild(actionRow);
+            }
+
+            if (pathValue.parentNode !== hoverContents) {
+                hoverContents.appendChild(pathValue);
+            }
+
+            if (actionRow !== pathValue.nextSibling) {
+                hoverContents.insertBefore(pathValue, actionRow);
+            }
+
+            if (titleHover) {
+                var anchorNode = titleHover.nextSibling;
+                if (pathValue !== anchorNode) {
+                    hoverContents.insertBefore(pathValue, anchorNode);
+                }
+            }
+
+            if (codeHover) {
+                hoverContents.insertBefore(actionRow, codeHover);
+            } else {
+                hoverContents.appendChild(actionRow);
+            }
+
+            resizeJsonPathHover(hoverContents);
+        }
+    }
+
+    function resizeJsonPathHover(hoverContents) {
+        if (!hoverContents) {
+            return;
+        }
+
+        var hoverWidget = hoverContents.closest('.monaco-hover');
+        var hoverRow = hoverContents.closest('.hover-row');
+        var hoverContent = hoverContents.closest('.monaco-hover-content');
+        var scrollable = hoverContents.closest('.monaco-scrollable-element');
+        var requiredHeight = Math.ceil(hoverContents.scrollHeight);
+
+        if (!requiredHeight || !hoverContent || !scrollable) {
+            return;
+        }
+
+        if (hoverWidget) {
+            hoverWidget.style.height = requiredHeight + 'px';
+            hoverWidget.style.overflow = 'visible';
+        }
+
+        hoverContent.style.height = requiredHeight + 'px';
+        hoverContent.style.overflow = 'visible';
+        scrollable.style.height = requiredHeight + 'px';
+        scrollable.style.overflow = 'visible';
+
+        if (hoverRow) {
+            hoverRow.style.height = requiredHeight + 'px';
+        }
+    }
+
+    function handleJsonPathCopyInteraction(event, isPointerDown, buttonOverride) {
+        if (!event) {
+            return;
+        }
+
+        event.preventDefault();
+        event.stopPropagation();
+
+        var button = buttonOverride || event.currentTarget;
+        if (!button) {
+            return;
+        }
+
+        // Pointer interactions in Monaco hover are intercepted before click completes,
+        // so perform the copy on pointerdown and ignore the follow-up click.
+        if (!isPointerDown && button.dataset && button.dataset.skipNextClick === 'true') {
+            button.dataset.skipNextClick = 'false';
+            return;
+        }
+
+        if (isPointerDown && button.dataset) {
+            button.dataset.skipNextClick = 'true';
+        }
+
+        var jsonPath = button.dataset ? button.dataset.jsonPath || '' : '';
+        if (!jsonPath) {
+            return;
+        }
+
+        writeTextToClipboard(jsonPath)
+            .then(function () {
+                setCopyButtonState(button, 'Copied');
+            })
+            .catch(function () {
+                setCopyButtonState(button, 'Failed');
+            });
+    }
+
+    function setCopyButtonState(button, label) {
+        if (!button) {
+            return;
+        }
+
+        if (button._resetLabelTimer) {
+            window.clearTimeout(button._resetLabelTimer);
+        }
+
+        button.textContent = label;
+        button.dataset.state = label.toLowerCase();
+        button._resetLabelTimer = window.setTimeout(function () {
+            button.textContent = 'Copy';
+            button.dataset.state = 'idle';
+            button._resetLabelTimer = 0;
+        }, 1600);
+    }
+
+    function writeTextToClipboard(text) {
+        if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+            return navigator.clipboard.writeText(text).catch(function () {
+                return copyTextWithExecCommand(text);
+            });
+        }
+
+        return copyTextWithExecCommand(text);
+    }
+
+    function copyTextWithExecCommand(text) {
+        return new Promise(function (resolve, reject) {
+            var textarea = document.createElement('textarea');
+            textarea.value = text;
+            textarea.setAttribute('readonly', 'readonly');
+            textarea.style.position = 'fixed';
+            textarea.style.top = '-1000px';
+            textarea.style.opacity = '0';
+            document.body.appendChild(textarea);
+            textarea.select();
+            textarea.setSelectionRange(0, textarea.value.length);
+
+            try {
+                var copied = document.execCommand('copy');
+                document.body.removeChild(textarea);
+                if (copied) {
+                    resolve();
+                    return;
+                }
+
+                reject(new Error('Copy command was rejected.'));
+            } catch (error) {
+                document.body.removeChild(textarea);
+                reject(error);
+            }
+        });
+    }
 
     function clearPathInputTimer() {
         if (!pathInputTimer) {
@@ -157,11 +516,38 @@
                 return {
                     range: range,
                     contents: [
-                        { value: '**Normalized Path**' },
-                        { value: '`' + path.replace(/`/g, '\\`') + '`' }
+                        { value: '**JsonPath**' },
+                        { value: formatHoverCodeBlock(path) }
                     ]
                 };
             }
+        });
+    }
+
+    function formatHoverCodeBlock(value) {
+        var formattedPath = formatPathForDisplay(value);
+        return '```text\n' + formattedPath.replace(/```/g, '\\`\\`\\`') + '\n```';
+    }
+
+    function formatPathForDisplay(path) {
+        if (!path || path[0] !== '$') {
+            return path || '$';
+        }
+
+        return path.replace(/\[(\d+)\]|\['((?:\\.|[^'])*)'\]/g, function (_, arrayIndex, rawProperty) {
+            if (typeof arrayIndex !== 'undefined') {
+                return '[' + arrayIndex + ']';
+            }
+
+            var propertyName = rawProperty
+                .replace(/\\'/g, "'")
+                .replace(/\\\\/g, '\\');
+
+            if (/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(propertyName)) {
+                return '.' + propertyName;
+            }
+
+            return "['" + rawProperty + "']";
         });
     }
 
@@ -178,6 +564,10 @@
             folding: true,
             foldingStrategy: 'auto',
             showFoldingControls: 'mouseover',
+            hover: {
+                enabled: true,
+                sticky: true
+            },
             renderIndentGuides: true,
             guides: {
                 indentation: true,
@@ -385,6 +775,24 @@
 
             jsonEditor = monacoInstance.editor.create(jsonElement, Object.assign(editorOptions(false), { model: jsonModel }));
             resultEditor = monacoInstance.editor.create(resultElement, Object.assign(editorOptions(true), { model: resultModel }));
+            ensureContextMenuFilter();
+            ensureHoverEnhancer();
+
+            if (jsonEditor && typeof jsonEditor.onContextMenu === 'function') {
+                jsonEditor.onContextMenu(function () {
+                    scheduleHideChangeAllOccurrencesMenuItem();
+                });
+            }
+
+            if (resultEditor && typeof resultEditor.onContextMenu === 'function') {
+                resultEditor.onContextMenu(function () {
+                    scheduleHideChangeAllOccurrencesMenuItem();
+                });
+            }
+
+            // Override Ctrl+F2 so Change All Occurrences cannot be triggered from keyboard.
+            jsonEditor.addCommand(monacoInstance.KeyMod.CtrlCmd | monacoInstance.KeyCode.F2, function () { });
+            resultEditor.addCommand(monacoInstance.KeyMod.CtrlCmd | monacoInstance.KeyCode.F2, function () { });
 
             jsonEditor.onDidChangeModelContent(function () {
                 if (suppressJsonChange || !dotNetReference) {
@@ -462,6 +870,8 @@
         },
         dispose: function () {
             detachPathInput();
+            disposeContextMenuFilter();
+            disposeHoverEnhancer();
 
             if (jsonEditor) {
                 jsonEditor.dispose();
