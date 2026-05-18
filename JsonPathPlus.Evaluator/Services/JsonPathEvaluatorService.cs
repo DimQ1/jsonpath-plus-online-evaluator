@@ -19,6 +19,7 @@ public class JsonPathEvaluatorService
     /// </summary>
     public sealed record EvaluationResult(
         List<JsonNode?> AllMatches,
+        List<string> AllMatchPaths,
         string? Error,
         int MatchCount)
     {
@@ -31,7 +32,7 @@ public class JsonPathEvaluatorService
     public async Task<EvaluationResult> EvaluateAsync(string json, string? path)
     {
         if (string.IsNullOrWhiteSpace(json))
-            return new EvaluationResult(new List<JsonNode?>(), "Please enter a JSON document.", 0);
+            return new EvaluationResult(new List<JsonNode?>(), new List<string>(), "Please enter a JSON document.", 0);
 
         // Validate JSON syntax first
         try
@@ -42,6 +43,7 @@ public class JsonPathEvaluatorService
         {
             return new EvaluationResult(
                 new List<JsonNode?>(),
+                new List<string>(),
                 $"Invalid JSON: {ex.Message}",
                 0);
         }
@@ -53,6 +55,7 @@ public class JsonPathEvaluatorService
             var root = JsonNode.Parse(json);
             return new EvaluationResult(
                 new List<JsonNode?> { root! },
+                new List<string> { "$" },
                 null,
                 1);
         }
@@ -66,13 +69,16 @@ public class JsonPathEvaluatorService
             // Note: The Stream extension methods will throw on invalid path,
             // so we use try/catch to provide user-friendly errors
             var allMatches = new List<JsonNode?>();
-            await foreach (var match in stream.ExtractAllJsonMatchesAsync(trimmedPath))
+            var allMatchPaths = new List<string>();
+            await foreach (var match in stream.ExtractAllJsonMatchesWithPathsAsync(trimmedPath))
             {
-                allMatches.Add(match);
+                allMatches.Add(match.Value);
+                allMatchPaths.Add(match.Path);
             }
 
             return new EvaluationResult(
                 allMatches,
+                allMatchPaths,
                 null,
                 allMatches.Count);
         }
@@ -80,6 +86,7 @@ public class JsonPathEvaluatorService
         {
             return new EvaluationResult(
                 new List<JsonNode?>(),
+                new List<string>(),
                 $"Invalid JSONPath expression: {ex.Message}",
                 0);
         }
@@ -87,6 +94,7 @@ public class JsonPathEvaluatorService
         {
             return new EvaluationResult(
                 new List<JsonNode?>(),
+                new List<string>(),
                 $"Invalid JSONPath expression: {ex.Message}",
                 0);
         }
@@ -94,6 +102,7 @@ public class JsonPathEvaluatorService
         {
             return new EvaluationResult(
                 new List<JsonNode?>(),
+                new List<string>(),
                 $"Error evaluating path: {ex.Message}",
                 0);
         }
@@ -102,6 +111,7 @@ public class JsonPathEvaluatorService
         {
             return new EvaluationResult(
                 new List<JsonNode?>(),
+                new List<string>(),
                 $"Error: {ex.Message}",
                 0);
         }

@@ -23,6 +23,65 @@
         <a href="" class="reload">Reload</a>
         <a class="dismiss">&#x2715;</a>
     </div>
+    <script>
+        window.jsonPathPlus = {
+            focusElement: function (element) {
+                if (element && typeof element.focus === 'function') {
+                    element.focus();
+                }
+            },
+            getCaretLine: function (element) {
+                if (!element || typeof element.selectionStart !== 'number') {
+                    return 1;
+                }
+
+                var value = element.value || '';
+                var caret = element.selectionStart;
+                var line = 1;
+
+                for (var i = 0; i < caret && i < value.length; i++) {
+                    if (value.charCodeAt(i) === 10) {
+                        line++;
+                    }
+                }
+
+                return line;
+            },
+            insertTab: function (element) {
+                if (!element || typeof element.selectionStart !== 'number' || typeof element.selectionEnd !== 'number') {
+                    return;
+                }
+
+                var start = element.selectionStart;
+                var end = element.selectionEnd;
+                var value = element.value || '';
+                var tabText = '  ';
+                element.value = value.substring(0, start) + tabText + value.substring(end);
+                var caret = start + tabText.length;
+                element.selectionStart = caret;
+                element.selectionEnd = caret;
+                element.dispatchEvent(new Event('input', { bubbles: true }));
+            },
+            getScrollInfo: function (element) {
+                if (!element) {
+                    return { scrollTop: 0, clientHeight: 0 };
+                }
+
+                return {
+                    scrollTop: element.scrollTop || 0,
+                    clientHeight: element.clientHeight || 0
+                };
+            },
+            syncScroll: function (source, target) {
+                if (!source || !target) {
+                    return;
+                }
+
+                target.scrollTop = source.scrollTop;
+                target.scrollLeft = source.scrollLeft;
+            }
+        };
+    </script>
     <script src="_framework/blazor.webassembly.js"></script>
 </body>
 
