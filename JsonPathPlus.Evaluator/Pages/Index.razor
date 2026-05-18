@@ -2,6 +2,7 @@
 @inject IJSRuntime JS
 @implements IAsyncDisposable
 @using System.Text.Json
+@using JsonPathPlus.Evaluator.Workers
 
 @* Provided by _Imports: System.Text.Json.Nodes, JsonPathPlus.Evaluator.Services *@
 
@@ -79,7 +80,7 @@
     private bool showFirstOnly = true;
     private bool showOutputPaths;
     private int matchCount;
-    private List<JsonNode?> allMatches = new();
+    private List<string> allMatchTexts = new();
     private List<string> allMatchPaths = new();
     private string? jsonError;
     private string? pathError;
@@ -87,7 +88,18 @@
     private bool showToast;
     private string toastMessage = "";
     private Timer? debounceTimer;
+    private bool isEvaluating;
+    private bool isEvaluationRunning;
+    private bool evaluationPending;
+    private bool pendingEvaluationPersistence;
+    private bool jsonChangedSinceLastEvaluation = true;
+    private bool lastJsonWasValid = true;
+    private string? lastJsonValidationError;
+    private int? lastJsonValidationLine;
+    private int? lastJsonValidationColumn;
+    private long latestEvaluationRequestId;
     private bool showHistory;
+    private ElementReference pathInputRef;
     private ElementReference jsonMonacoRef;
     private ElementReference resultMonacoRef;
     private DotNetObjectReference<Index>? monacoDotNetReference;
@@ -123,19 +135,8 @@
         set
         {
             _jsonInput = value;
+            jsonChangedSinceLastEvaluation = true;
             jsonError = null;
-            hasTyped = true;
-            DebounceEvaluate();
-        }
-    }
-
-    private string pathInput
-    {
-        get => _pathInput;
-        set
-        {
-            _pathInput = value;
-            pathError = null;
             hasTyped = true;
             DebounceEvaluate();
         }
@@ -147,10 +148,10 @@
     private bool HasResults => matchCount > 0 && !HasPathError;
     private bool HasTyped => hasTyped;
 
-    private IEnumerable<JsonNode?> DisplayResults =>
-        showFirstOnly && allMatches.Count > 0
-            ? new[] { allMatches[0] }
-            : allMatches;
+    private IEnumerable<string> DisplayResultTexts =>
+        showFirstOnly && allMatchTexts.Count > 0
+            ? new[] { allMatchTexts[0] }
+            : allMatchTexts;
 
     private IEnumerable<string> DisplayResultPaths =>
         showFirstOnly && allMatchPaths.Count > 0
@@ -187,9 +188,6 @@
         }
 
         await LoadHistoryAsync();
-
-        await EvaluateAsync();
-
         RefreshResultDisplayText();
     }
 
@@ -201,6 +199,19 @@
         }
 
         await InitializeMonacoEditorsAsync();
+        await Task.Delay(250);
+        await RequestEvaluationAsync(persistResult: false);
+
+        if (!hasTyped
+            && matchCount == 0
+            && string.IsNullOrEmpty(jsonError)
+            && string.IsNullOrEmpty(pathError)
+            && _jsonInput == SampleJson
+            && _pathInput == SamplePath)
+        {
+            await Task.Delay(250);
+            await RequestEvaluationAsync(persistResult: false);
+        }
     }
 
     private async Task InitializeMonacoEditorsAsync()
@@ -208,9 +219,11 @@
         monacoDotNetReference = DotNetObjectReference.Create(this);
         await JS.InvokeVoidAsync(
             "jsonPathPlusMonaco.initialize",
+            pathInputRef,
             jsonMonacoRef,
             resultMonacoRef,
             monacoDotNetReference,
+            _pathInput,
             _jsonInput,
             resultDisplayText);
         monacoInitialized = true;
@@ -230,7 +243,8 @@
         _pathInput = example;
         pathError = null;
         hasTyped = true;
-        _ = EvaluateAsync();
+        _ = SetPathInputValueAsync(_pathInput);
+        _ = RequestEvaluationAsync();
         StateHasChanged();
     }
 
@@ -239,18 +253,24 @@
         _jsonInput = SampleJson;
         await SetJsonEditorValueAsync(_jsonInput);
         _pathInput = SamplePath;
+        await SetPathInputValueAsync(_pathInput);
         showFirstOnly = true;
         jsonError = null;
         pathError = null;
         hasTyped = false;
-        allMatches = new();
+        allMatchTexts = new();
         allMatchPaths = new();
         matchCount = 0;
         showHistory = false;
+        jsonChangedSinceLastEvaluation = true;
+        lastJsonWasValid = true;
+        lastJsonValidationError = null;
+        lastJsonValidationLine = null;
+        lastJsonValidationColumn = null;
 
         // Clear URL hash
         await JS.InvokeVoidAsync("eval", "history.replaceState(null, '', window.location.pathname);");
-        await EvaluateAsync();
+        await RequestEvaluationAsync();
         StateHasChanged();
     }
 
@@ -276,6 +296,7 @@
         _jsonInput = json;
         await SetJsonEditorValueAsync(_jsonInput);
         _pathInput = entry.Path;
+        await SetPathInputValueAsync(_pathInput);
         jsonError = null;
         pathError = null;
         hasTyped = true;
@@ -288,7 +309,7 @@
         }
 
         StateHasChanged();
-        await EvaluateAsync();
+        await RequestEvaluationAsync();
     }
 
     private async Task ClearHistoryAsync()
@@ -365,12 +386,15 @@
 
         foreach (var duplicateId in duplicateIds)
         {
-            await JS.InvokeVoidAsync("eval", $"localStorage.removeItem('{GetHistoryBlobKey(duplicateId)}')");
+            await RemoveHistoryBlobAsync(duplicateId);
         }
 
         var entryId = Guid.NewGuid().ToString("N");
-        await JS.InvokeVoidAsync("eval",
-            $"localStorage.setItem('{GetHistoryBlobKey(entryId)}', `{EscapeForTemplateLiteral(_jsonInput)}`)");
+        if (!await TryPersistHistoryBlobAsync(entryId, _jsonInput))
+        {
+            ShowToast("History storage is full. Older entries were removed if possible.");
+            return;
+        }
 
         // Add to front
         historyEntries.Insert(0, new HistoryEntry(
@@ -388,11 +412,60 @@
 
             foreach (var item in removed)
             {
-                await JS.InvokeVoidAsync("eval", $"localStorage.removeItem('{GetHistoryBlobKey(item.Id)}')");
+                await RemoveHistoryBlobAsync(item.Id);
             }
         }
 
         await SaveHistoryAsync();
+    }
+
+    private async Task<bool> TryPersistHistoryBlobAsync(string historyId, string json)
+    {
+        var storageValue = EscapeForTemplateLiteral(json);
+
+        if (await TrySetLocalStorageItemAsync(GetHistoryBlobKey(historyId), storageValue))
+        {
+            return true;
+        }
+
+        while (historyEntries.Count > 0)
+        {
+            var removedEntry = historyEntries[^1];
+            historyEntries.RemoveAt(historyEntries.Count - 1);
+            await RemoveHistoryBlobAsync(removedEntry.Id);
+
+            if (await TrySetLocalStorageItemAsync(GetHistoryBlobKey(historyId), storageValue))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private async Task<bool> TrySetLocalStorageItemAsync(string key, string value)
+    {
+        try
+        {
+            await JS.InvokeVoidAsync("eval", $"localStorage.setItem('{key}', `{value}`)");
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private async Task RemoveHistoryBlobAsync(string historyId)
+    {
+        try
+        {
+            await JS.InvokeVoidAsync("eval", $"localStorage.removeItem('{GetHistoryBlobKey(historyId)}')");
+        }
+        catch
+        {
+            // Ignore storage cleanup failures.
+        }
     }
 
     private async Task SaveHistoryAsync()
@@ -526,7 +599,7 @@
             jsonError = null;
             hasTyped = true;
             StateHasChanged();
-            await EvaluateAsync();
+            await RequestEvaluationAsync();
         }
         catch (Exception ex)
         {
@@ -569,23 +642,159 @@
         debounceTimer?.Dispose();
         debounceTimer = new Timer(async _ =>
         {
-            await InvokeAsync(EvaluateAsync);
-        }, null, 300, Timeout.Infinite);
+            await InvokeAsync(() => RequestEvaluationAsync(persistResult: false));
+        }, null, 500, Timeout.Infinite);
     }
 
-    private async Task EvaluateAsync()
+    private async Task SetPathInputValueAsync(string value)
+    {
+        if (!monacoInitialized)
+        {
+            return;
+        }
+
+        await JS.InvokeVoidAsync("jsonPathPlusMonaco.setPathValue", value);
+    }
+
+    private async Task CancelActiveWorkerEvaluationAsync()
+    {
+        try
+        {
+            await JS.InvokeVoidAsync("jsonPathWorkerClient.cancelActive");
+        }
+        catch
+        {
+            // Ignore cancellation failures; the next evaluation still supersedes the current one.
+        }
+    }
+
+    private async Task RequestEvaluationAsync(bool persistResult = true)
+    {
+        latestEvaluationRequestId++;
+        evaluationPending = true;
+        pendingEvaluationPersistence = persistResult;
+
+        var shouldShowEvaluationState = !isEvaluating;
+        isEvaluating = true;
+
+        if (shouldShowEvaluationState)
+        {
+            RefreshResultDisplayText();
+            StateHasChanged();
+        }
+
+        if (isEvaluationRunning)
+        {
+            await CancelActiveWorkerEvaluationAsync();
+            return;
+        }
+
+        try
+        {
+            while (evaluationPending)
+            {
+                evaluationPending = false;
+
+                var shouldPersist = pendingEvaluationPersistence;
+                pendingEvaluationPersistence = false;
+                var requestId = latestEvaluationRequestId;
+
+                isEvaluationRunning = true;
+                try
+                {
+                    await EvaluateAsync(requestId, shouldPersist);
+                }
+                finally
+                {
+                    isEvaluationRunning = false;
+                }
+            }
+        }
+        finally
+        {
+            if (!evaluationPending)
+            {
+                isEvaluating = false;
+                RefreshResultDisplayText();
+                StateHasChanged();
+            }
+        }
+    }
+
+    private async Task EvaluateAsync(long requestId, bool persistResult = true)
     {
         if (string.IsNullOrWhiteSpace(_jsonInput) && string.IsNullOrWhiteSpace(_pathInput))
         {
-            allMatches = new();
+            allMatchTexts = new();
             allMatchPaths = new();
             matchCount = 0;
             RefreshResultDisplayText();
             return;
         }
 
-        var evaluator = new JsonPathEvaluatorService();
-        var result = await evaluator.EvaluateAsync(_jsonInput, _pathInput);
+        JsonPathWorkerEvaluationResult result;
+
+        if (!jsonChangedSinceLastEvaluation && !lastJsonWasValid)
+        {
+            result = new JsonPathWorkerEvaluationResult(
+                new List<string>(),
+                new List<string>(),
+                lastJsonValidationError,
+                0,
+                lastJsonValidationLine,
+                lastJsonValidationColumn);
+        }
+        else
+        {
+            var validateJson = jsonChangedSinceLastEvaluation;
+
+            try
+            {
+                var serializedResult = await JS.InvokeAsync<string>(
+                    "jsonPathWorkerClient.evaluate",
+                    _jsonInput,
+                    _pathInput,
+                    validateJson);
+
+                if (requestId != latestEvaluationRequestId)
+                {
+                    return;
+                }
+
+                result = JsonSerializer.Deserialize<JsonPathWorkerEvaluationResult>(serializedResult)
+                    ?? new JsonPathWorkerEvaluationResult(
+                        new List<string>(),
+                        new List<string>(),
+                        "Worker returned an empty evaluation result.",
+                        0);
+            }
+            catch (JSException ex) when (IsWorkerCancellation(ex))
+            {
+                return;
+            }
+            catch (JSException ex)
+            {
+                result = new JsonPathWorkerEvaluationResult(
+                    new List<string>(),
+                    new List<string>(),
+                    $"Worker evaluation failed: {ex.Message}",
+                    0);
+            }
+
+            if (validateJson)
+            {
+                jsonChangedSinceLastEvaluation = false;
+                lastJsonWasValid = !IsJsonValidationError(result);
+                lastJsonValidationError = lastJsonWasValid ? null : result.Error;
+                lastJsonValidationLine = lastJsonWasValid ? null : result.JsonErrorLine;
+                lastJsonValidationColumn = lastJsonWasValid ? null : result.JsonErrorColumn;
+            }
+        }
+
+        if (requestId != latestEvaluationRequestId)
+        {
+            return;
+        }
 
         var errorLineToScroll = (int?)null;
 
@@ -606,7 +815,7 @@
                 pathError = result.Error;
             }
 
-            allMatches = new();
+            allMatchTexts = new();
             allMatchPaths = new();
             matchCount = 0;
         }
@@ -614,13 +823,15 @@
         {
             jsonError = null;
             pathError = null;
-            allMatches = result.AllMatches;
+            allMatchTexts = result.PrettyMatches;
             allMatchPaths = result.AllMatchPaths;
             matchCount = result.MatchCount;
 
-            // Persist successful evaluation
-            await SaveToLocalStorageAsync();
-            await AddHistoryEntryAsync();
+            if (persistResult)
+            {
+                await SaveToLocalStorageAsync();
+                await AddHistoryEntryAsync();
+            }
         }
 
         RefreshResultDisplayText();
@@ -695,19 +906,41 @@
         return Task.CompletedTask;
     }
 
+    [JSInvokable]
+    public Task OnPathInputChanged(string value)
+    {
+        if (_pathInput == value)
+        {
+            return Task.CompletedTask;
+        }
+
+        _pathInput = value;
+        pathError = null;
+        hasTyped = true;
+        return RequestEvaluationAsync(persistResult: false);
+    }
+
+    private static bool IsJsonValidationError(JsonPathWorkerEvaluationResult result)
+        => result.JsonErrorLine.HasValue
+            || result.JsonErrorColumn.HasValue
+            || (result.Error?.Contains("Invalid JSON", StringComparison.OrdinalIgnoreCase) ?? false);
+
+    private static bool IsWorkerCancellation(JSException exception)
+        => exception.Message.Contains("EvaluationCanceled", StringComparison.Ordinal);
+
     private static string EscapeForTemplateLiteral(string value)
         => value.Replace("\\", "\\\\", StringComparison.Ordinal).Replace("`", "\\`", StringComparison.Ordinal);
 
     private static string GetHistoryBlobKey(string historyId)
         => $"{LocalStorageHistoryBlobPrefix}{historyId}";
 
-    private static string PrettyPrintJson(JsonNode? node)
-    {
-        return JsonPathEvaluatorService.PrettyPrint(node);
-    }
-
     private string BuildResultsDisplayText()
     {
+        if (isEvaluating)
+        {
+            return ShowOutputPaths ? "Evaluating paths..." : "Evaluating results...";
+        }
+
         if (HasPathError && !string.IsNullOrEmpty(pathError))
         {
             return pathError;
@@ -730,11 +963,10 @@
         {
             if (showFirstOnly)
             {
-                return PrettyPrintJson(DisplayResults.FirstOrDefault());
+                return DisplayResultTexts.FirstOrDefault() ?? "null";
             }
 
-            var prettyMatches = DisplayResults
-                .Select(PrettyPrintJson)
+            var prettyMatches = DisplayResultTexts
                 .Select(text => IndentBlock(text, 2));
 
             return "[\n" + string.Join(",\n", prettyMatches) + "\n]";
@@ -866,11 +1098,11 @@
 <div class="path-input-bar">
     <label for="pathInput">JSONPath</label>
     <input id="pathInput"
+           @ref="pathInputRef"
            class="path-input @(HasPathError ? "error" : (HasResults ? "success" : ""))"
            type="text"
+           value="@_pathInput"
            placeholder="e.g. $.store.book[*].title"
-           @bind-value="pathInput"
-           @bind-value:event="oninput"
            spellcheck="false" />
     <div class="match-mode-toggle">
         <button class="@(showFirstOnly ? "active" : "")"
@@ -952,9 +1184,19 @@
                     <input type="checkbox" @bind="ShowOutputPaths" />
                     <span>Output Paths</span>
                 </label>
-                <span class="match-count @(matchCount == 0 ? "zero" : "")">
-                    @matchCount match@(matchCount == 1 ? "" : "es")
-                </span>
+                @if (isEvaluating)
+                {
+                    <span class="evaluation-status" aria-live="polite">
+                        <span class="evaluation-spinner" aria-hidden="true"></span>
+                        <span>Evaluating...</span>
+                    </span>
+                }
+                else
+                {
+                    <span class="match-count @(matchCount == 0 ? "zero" : "")">
+                        @matchCount match@(matchCount == 1 ? "" : "es")
+                    </span>
+                }
             </div>
         </div>
         <div class="panel-body">

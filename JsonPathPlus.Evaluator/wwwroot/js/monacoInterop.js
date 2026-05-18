@@ -2,12 +2,110 @@
     var monacoBaseUrl = 'https://cdn.jsdelivr.net/npm/monaco-editor@0.52.2/min/vs';
     var monacoReadyPromise = null;
     var hoverRegistration = null;
+    var pathInputElement = null;
+    var pathInputTimer = null;
+    var pathInputHandler = null;
+    var pathInputBlurHandler = null;
+    var pathInputKeydownHandler = null;
     var jsonEditor = null;
     var resultEditor = null;
     var jsonModel = null;
     var resultModel = null;
     var dotNetReference = null;
     var suppressJsonChange = false;
+    var suppressPathInputChange = false;
+
+    function clearPathInputTimer() {
+        if (!pathInputTimer) {
+            return;
+        }
+
+        window.clearTimeout(pathInputTimer);
+        pathInputTimer = null;
+    }
+
+    function notifyPathInputChanged() {
+        if (!pathInputElement || !dotNetReference) {
+            return;
+        }
+
+        dotNetReference.invokeMethodAsync('OnPathInputChanged', pathInputElement.value);
+    }
+
+    function schedulePathInputNotification() {
+        clearPathInputTimer();
+        pathInputTimer = window.setTimeout(function () {
+            notifyPathInputChanged();
+        }, 250);
+    }
+
+    function detachPathInput() {
+        clearPathInputTimer();
+
+        if (!pathInputElement) {
+            return;
+        }
+
+        if (pathInputHandler) {
+            pathInputElement.removeEventListener('input', pathInputHandler);
+        }
+        if (pathInputBlurHandler) {
+            pathInputElement.removeEventListener('blur', pathInputBlurHandler);
+        }
+        if (pathInputKeydownHandler) {
+            pathInputElement.removeEventListener('keydown', pathInputKeydownHandler);
+        }
+
+        pathInputHandler = null;
+        pathInputBlurHandler = null;
+        pathInputKeydownHandler = null;
+        pathInputElement = null;
+    }
+
+    function attachPathInput(element, initialValue) {
+        detachPathInput();
+
+        if (!element) {
+            return;
+        }
+
+        pathInputElement = element;
+        pathInputElement.value = initialValue || '';
+
+        pathInputHandler = function () {
+            if (suppressPathInputChange || !dotNetReference) {
+                return;
+            }
+
+            if (window.jsonPathWorkerClient && typeof window.jsonPathWorkerClient.cancelActive === 'function') {
+                window.jsonPathWorkerClient.cancelActive();
+            }
+
+            schedulePathInputNotification();
+        };
+
+        pathInputBlurHandler = function () {
+            if (suppressPathInputChange || !dotNetReference) {
+                return;
+            }
+
+            clearPathInputTimer();
+            notifyPathInputChanged();
+        };
+
+        pathInputKeydownHandler = function (event) {
+            if (event.key !== 'Enter' || suppressPathInputChange || !dotNetReference) {
+                return;
+            }
+
+            clearPathInputTimer();
+            notifyPathInputChanged();
+        };
+
+        pathInputElement.addEventListener('input', pathInputHandler);
+        pathInputElement.addEventListener('blur', pathInputBlurHandler);
+        pathInputElement.addEventListener('keydown', pathInputKeydownHandler);
+    }
 
     function ensureMonaco() {
         if (monacoReadyPromise) {
@@ -270,9 +368,10 @@
     }
 
     window.jsonPathPlusMonaco = {
-        initialize: async function (jsonElement, resultElement, reference, initialJson, initialResult) {
+        initialize: async function (pathElement, jsonElement, resultElement, reference, initialPath, initialJson, initialResult) {
             var monacoInstance = await ensureMonaco();
             dotNetReference = reference;
+            attachPathInput(pathElement, initialPath);
 
             if (jsonEditor) {
                 jsonEditor.dispose();
@@ -292,8 +391,25 @@
                     return;
                 }
 
+                if (jsonEditor
+                    && typeof jsonEditor.hasTextFocus === 'function'
+                    && jsonEditor.hasTextFocus()
+                    && window.jsonPathWorkerClient
+                    && typeof window.jsonPathWorkerClient.cancelActive === 'function') {
+                    window.jsonPathWorkerClient.cancelActive();
+                }
+
                 dotNetReference.invokeMethodAsync('OnJsonDocumentChanged', jsonModel.getValue());
             });
+        },
+        setPathValue: function (value) {
+            if (!pathInputElement || pathInputElement.value === (value || '')) {
+                return;
+            }
+
+            suppressPathInputChange = true;
+            pathInputElement.value = value || '';
+            suppressPathInputChange = false;
         },
         setJsonValue: function (value) {
             if (!jsonModel || jsonModel.getValue() === (value || '')) {
@@ -345,6 +461,8 @@
             }
         },
         dispose: function () {
+            detachPathInput();
+
             if (jsonEditor) {
                 jsonEditor.dispose();
                 jsonEditor = null;

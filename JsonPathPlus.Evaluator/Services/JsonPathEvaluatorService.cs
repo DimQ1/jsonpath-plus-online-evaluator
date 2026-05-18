@@ -33,32 +33,35 @@ public class JsonPathEvaluatorService
     /// <summary>
     /// Evaluates a JSONPath expression against a JSON string.
     /// </summary>
-    public async Task<EvaluationResult> EvaluateAsync(string json, string? path)
+    public async Task<EvaluationResult> EvaluateAsync(string json, string? path, bool validateJson = true)
     {
         if (string.IsNullOrWhiteSpace(json))
             return new EvaluationResult(new List<JsonNode?>(), new List<string>(), "Please enter a JSON document.", 0);
 
-        // Validate JSON syntax first
-        try
+        if (validateJson)
         {
-            JsonNode.Parse(json);
-        }
-        catch (JsonException ex)
-        {
-            var line = ex.LineNumber.HasValue ? (int)ex.LineNumber.Value + 1 : (int?)null;
-            var column = ex.BytePositionInLine.HasValue ? (int)ex.BytePositionInLine.Value + 1 : (int?)null;
-            var cleanMessage = BuildJsonErrorMessage(ex.Message);
-            var position = line.HasValue && column.HasValue
-                ? $" at line {line.Value}, column {column.Value}"
-                : string.Empty;
+            // Validate JSON syntax first
+            try
+            {
+                JsonNode.Parse(json);
+            }
+            catch (JsonException ex)
+            {
+                var line = ex.LineNumber.HasValue ? (int)ex.LineNumber.Value + 1 : (int?)null;
+                var column = ex.BytePositionInLine.HasValue ? (int)ex.BytePositionInLine.Value + 1 : (int?)null;
+                var cleanMessage = BuildJsonErrorMessage(ex.Message);
+                var position = line.HasValue && column.HasValue
+                    ? $" at line {line.Value}, column {column.Value}"
+                    : string.Empty;
 
-            return new EvaluationResult(
-                new List<JsonNode?>(),
-                new List<string>(),
-                $"Invalid JSON{position}: {cleanMessage}",
-                0,
-                line,
-                column);
+                return new EvaluationResult(
+                    new List<JsonNode?>(),
+                    new List<string>(),
+                    $"Invalid JSON{position}: {cleanMessage}",
+                    0,
+                    line,
+                    column);
+            }
         }
 
         // Handle null/root path: return entire document

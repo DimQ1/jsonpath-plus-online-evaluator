@@ -410,6 +410,29 @@ html, body {
     background: transparent;
 }
 
+.panel-header .evaluation-status {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--color-primary);
+    background: rgba(37, 99, 235, 0.1);
+    padding: 2px 8px;
+    border-radius: 10px;
+    text-transform: none;
+    letter-spacing: normal;
+}
+
+.panel-header .evaluation-spinner {
+    width: 10px;
+    height: 10px;
+    border: 2px solid rgba(37, 99, 235, 0.2);
+    border-top-color: var(--color-primary);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+}
+
 .panel-header-actions {
     display: flex;
     align-items: center;
