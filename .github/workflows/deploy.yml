@@ -39,7 +39,7 @@ jobs:
         run: dotnet publish JsonPathPlus.Evaluator/JsonPathPlus.Evaluator.csproj -c Release -o publish
 
       - name: Rewrite base href
-        uses: SteveSandersonMS/ghaction-rewrite-base-href@v2
+        uses: SteveSandersonMS/ghaction-rewrite-base-href@4583ede549773dabe1410c42e703d54cf52859ff # v1.1.0
         with:
           base_href: /jsonpath-plus-online-evaluator/
           html_path: publish/wwwroot/index.html
