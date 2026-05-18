@@ -1,5 +1,6 @@
 @page "/"
 @inject IJSRuntime JS
+@implements IAsyncDisposable
 @using System.Text.Json
 
 @* Provided by _Imports: System.Text.Json.Nodes, JsonPathPlus.Evaluator.Services *@
@@ -87,21 +88,12 @@
     private string toastMessage = "";
     private Timer? debounceTimer;
     private bool showHistory;
-    private ElementReference jsonEditorRef;
-    private ElementReference jsonEditorGutterRef;
-    private int jsonEditorActiveLine = 1;
-    private double jsonEditorScrollTop;
-    private double jsonEditorClientHeight = 600;
-    private int jsonEditorFirstVisibleLine = 1;
-    private int jsonEditorVisibleLineCount = 120;
+    private ElementReference jsonMonacoRef;
+    private ElementReference resultMonacoRef;
+    private DotNetObjectReference<Index>? monacoDotNetReference;
+    private bool monacoInitialized;
 
     private string resultDisplayText = "";
-    private string[] resultDisplayLines = Array.Empty<string>();
-    private int resultVisibleLineCount;
-
-    private const double JsonEditorLineHeightPx = 20.15;
-    private const int JsonEditorLineBuffer = 20;
-    private const int ResultChunkSize = 220;
 
     // ===== History Model =====
     private sealed record HistoryEntry(
@@ -118,8 +110,6 @@
         public string ShortJson => JsonPreview;
     }
 
-    private readonly record struct ScrollInfo(double ScrollTop, double ClientHeight);
-
     private List<HistoryEntry> historyEntries = new();
     private const int MaxHistoryEntries = 20;
     private const string LocalStorageStateKey = "jpplus_state";
@@ -135,7 +125,6 @@
             _jsonInput = value;
             jsonError = null;
             hasTyped = true;
-            UpdateJsonEditorViewport();
             DebounceEvaluate();
         }
     }
@@ -183,36 +172,6 @@
         }
     }
 
-    private int JsonEditorLineCount => Math.Max(1, _jsonInput.Count(c => c == '\n') + 1);
-
-    private int JsonEditorLastVisibleLine => Math.Min(
-        JsonEditorLineCount,
-        jsonEditorFirstVisibleLine + jsonEditorVisibleLineCount - 1);
-
-    private IEnumerable<int> JsonEditorVisibleLineNumbers
-    {
-        get
-        {
-            var count = JsonEditorLastVisibleLine - jsonEditorFirstVisibleLine + 1;
-            if (count <= 0)
-            {
-                return Array.Empty<int>();
-            }
-
-            return Enumerable.Range(jsonEditorFirstVisibleLine, count);
-        }
-    }
-
-    private double JsonEditorTopPaddingPx => Math.Max(0, (jsonEditorFirstVisibleLine - 1) * JsonEditorLineHeightPx);
-
-    private double JsonEditorBottomPaddingPx => Math.Max(0, (JsonEditorLineCount - JsonEditorLastVisibleLine) * JsonEditorLineHeightPx);
-
-    private string VisibleResultDisplayText => resultDisplayLines.Length <= resultVisibleLineCount
-        ? resultDisplayText
-        : string.Join("\n", resultDisplayLines.Take(resultVisibleLineCount));
-
-    private bool HasMoreResultLines => resultDisplayLines.Length > resultVisibleLineCount;
-
     // ===== Lifecycle =====
     protected override async Task OnInitializedAsync()
     {
@@ -229,13 +188,34 @@
 
         await LoadHistoryAsync();
 
-        if (!hasTyped)
-        {
-            await EvaluateAsync();
-        }
+        await EvaluateAsync();
 
         RefreshResultDisplayText();
-        UpdateJsonEditorViewport();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender)
+        {
+            return;
+        }
+
+        await InitializeMonacoEditorsAsync();
+    }
+
+    private async Task InitializeMonacoEditorsAsync()
+    {
+        monacoDotNetReference = DotNetObjectReference.Create(this);
+        await JS.InvokeVoidAsync(
+            "jsonPathPlusMonaco.initialize",
+            jsonMonacoRef,
+            resultMonacoRef,
+            monacoDotNetReference,
+            _jsonInput,
+            resultDisplayText);
+        monacoInitialized = true;
+        await SetResultEditorValueAsync(resultDisplayText);
+        await UpdateJsonErrorMarkerAsync();
     }
 
     // ===== Event Handlers =====
@@ -257,6 +237,7 @@
     private async Task ResetAsync()
     {
         _jsonInput = SampleJson;
+        await SetJsonEditorValueAsync(_jsonInput);
         _pathInput = SamplePath;
         showFirstOnly = true;
         jsonError = null;
@@ -293,6 +274,7 @@
         }
 
         _jsonInput = json;
+        await SetJsonEditorValueAsync(_jsonInput);
         _pathInput = entry.Path;
         jsonError = null;
         pathError = null;
@@ -540,6 +522,7 @@
             using var stream = file.OpenReadStream(maxAllowedSize: 10 * 1024 * 1024);
             using var reader = new StreamReader(stream);
             _jsonInput = await reader.ReadToEndAsync();
+            await SetJsonEditorValueAsync(_jsonInput);
             jsonError = null;
             hasTyped = true;
             StateHasChanged();
@@ -560,7 +543,7 @@
     {
         try
         {
-            await JS.InvokeVoidAsync("jsonPathPlus.focusElement", jsonEditorRef);
+            await JS.InvokeVoidAsync("jsonPathPlusMonaco.focusJson");
         }
         catch
         {
@@ -568,59 +551,16 @@
         }
     }
 
-    private async Task SyncJsonEditorScrollAsync()
+    private async Task ScrollJsonEditorToLineAsync(int lineNumber)
     {
         try
         {
-            await JS.InvokeVoidAsync("jsonPathPlus.syncScroll", jsonEditorRef, jsonEditorGutterRef);
-
-            var scrollInfo = await JS.InvokeAsync<ScrollInfo>("jsonPathPlus.getScrollInfo", jsonEditorRef);
-            jsonEditorScrollTop = scrollInfo.ScrollTop;
-            jsonEditorClientHeight = scrollInfo.ClientHeight;
-            UpdateJsonEditorViewport();
+            await JS.InvokeVoidAsync("jsonPathPlusMonaco.revealJsonLine", lineNumber);
         }
         catch
         {
-            // Ignore scroll sync failures; the editor remains usable.
+            // Ignore scroll failures; the editor remains usable.
         }
-    }
-
-    private async Task UpdateJsonEditorCursorStateAsync()
-    {
-        try
-        {
-            var line = await JS.InvokeAsync<int>("jsonPathPlus.getCaretLine", jsonEditorRef);
-            if (line > 0)
-            {
-                jsonEditorActiveLine = line;
-                StateHasChanged();
-            }
-        }
-        catch
-        {
-            // Ignore cursor tracking failures; editing still works.
-        }
-    }
-
-    private async Task HandleJsonEditorKeyDownAsync(KeyboardEventArgs e)
-    {
-        if (!string.Equals(e.Key, "Tab", StringComparison.Ordinal))
-        {
-            return;
-        }
-
-        await JS.InvokeVoidAsync("jsonPathPlus.insertTab", jsonEditorRef);
-    }
-
-    private void UpdateJsonEditorViewport()
-    {
-        var firstVisible = Math.Max(1, (int)Math.Floor(jsonEditorScrollTop / JsonEditorLineHeightPx) - JsonEditorLineBuffer);
-        var visibleCount = Math.Max(
-            80,
-            (int)Math.Ceiling(jsonEditorClientHeight / JsonEditorLineHeightPx) + (JsonEditorLineBuffer * 2));
-
-        jsonEditorFirstVisibleLine = firstVisible;
-        jsonEditorVisibleLineCount = visibleCount;
     }
 
     // ===== Evaluation Logic =====
@@ -647,12 +587,18 @@
         var evaluator = new JsonPathEvaluatorService();
         var result = await evaluator.EvaluateAsync(_jsonInput, _pathInput);
 
+        var errorLineToScroll = (int?)null;
+
         if (result.Error is not null)
         {
             if (result.Error.Contains("Invalid JSON", StringComparison.OrdinalIgnoreCase))
             {
                 jsonError = result.Error;
                 pathError = null;
+                if (result.JsonErrorLine.HasValue && result.JsonErrorLine.Value > 0)
+                {
+                    errorLineToScroll = result.JsonErrorLine.Value;
+                }
             }
             else
             {
@@ -678,24 +624,75 @@
         }
 
         RefreshResultDisplayText();
+        await UpdateJsonErrorMarkerAsync(result.JsonErrorLine, result.JsonErrorColumn, jsonError);
         StateHasChanged();
+
+        if (errorLineToScroll.HasValue)
+        {
+            await ScrollJsonEditorToLineAsync(errorLineToScroll.Value);
+        }
     }
 
     private void RefreshResultDisplayText()
     {
         resultDisplayText = BuildResultsDisplayText();
-        resultDisplayLines = resultDisplayText.Split('\n');
-        resultVisibleLineCount = Math.Min(ResultChunkSize, resultDisplayLines.Length);
+        QueueResultEditorUpdate();
     }
 
-    private void LoadMoreResultLines()
+    private void QueueResultEditorUpdate()
     {
-        if (!HasMoreResultLines)
+        if (!monacoInitialized)
         {
             return;
         }
 
-        resultVisibleLineCount = Math.Min(resultVisibleLineCount + ResultChunkSize, resultDisplayLines.Length);
+        _ = InvokeAsync(async () => await SetResultEditorValueAsync(resultDisplayText));
+    }
+
+    private async Task SetJsonEditorValueAsync(string value)
+    {
+        if (!monacoInitialized)
+        {
+            return;
+        }
+
+        await JS.InvokeVoidAsync("jsonPathPlusMonaco.setJsonValue", value);
+    }
+
+    private async Task SetResultEditorValueAsync(string value)
+    {
+        if (!monacoInitialized)
+        {
+            return;
+        }
+
+        await JS.InvokeVoidAsync("jsonPathPlusMonaco.setResultValue", value);
+    }
+
+    private async Task UpdateJsonErrorMarkerAsync(int? line = null, int? column = null, string? message = null)
+    {
+        if (!monacoInitialized)
+        {
+            return;
+        }
+
+        await JS.InvokeVoidAsync(
+            "jsonPathPlusMonaco.setJsonError",
+            line,
+            column,
+            message);
+    }
+
+    [JSInvokable]
+    public Task OnJsonDocumentChanged(string value)
+    {
+        if (_jsonInput == value)
+        {
+            return Task.CompletedTask;
+        }
+
+        jsonInput = value;
+        return Task.CompletedTask;
     }
 
     private static string EscapeForTemplateLiteral(string value)
@@ -814,6 +811,25 @@
             });
         });
     }
+
+    public async ValueTask DisposeAsync()
+    {
+        debounceTimer?.Dispose();
+
+        if (monacoInitialized)
+        {
+            try
+            {
+                await JS.InvokeVoidAsync("jsonPathPlusMonaco.dispose");
+            }
+            catch
+            {
+                // Ignore cleanup failures during page teardown.
+            }
+        }
+
+        monacoDotNetReference?.Dispose();
+    }
 }
 
 @* ========== MAIN LAYOUT ========== *@
@@ -917,27 +933,8 @@
             </button>
         </div>
         <div class="panel-body">
-            <div class="editor-surface editor-shell @(HasJsonError ? "error" : "")" @onclick="FocusJsonEditorAsync">
-                <div class="editor-gutter" @ref="jsonEditorGutterRef" aria-hidden="true">
-                    <div class="editor-gutter-content" style="padding-top:@($"{JsonEditorTopPaddingPx}px"); padding-bottom:@($"{JsonEditorBottomPaddingPx}px")">
-                        @foreach (var lineNumber in JsonEditorVisibleLineNumbers)
-                        {
-                            <div class="editor-line-number @(lineNumber == jsonEditorActiveLine ? "active" : "")">@lineNumber</div>
-                        }
-                    </div>
-                </div>
-                <textarea class="editor-input"
-                          @ref="jsonEditorRef"
-                          @bind-value="jsonInput"
-                          @bind-value:event="oninput"
-                          @onscroll="SyncJsonEditorScrollAsync"
-                          @onkeydown="HandleJsonEditorKeyDownAsync"
-                          @onkeyup="UpdateJsonEditorCursorStateAsync"
-                          @onmouseup="UpdateJsonEditorCursorStateAsync"
-                          @onfocus="UpdateJsonEditorCursorStateAsync"
-                          placeholder="Paste your JSON document here..."
-                          spellcheck="false">
-                </textarea>
+            <div class="editor-surface monaco-surface @(HasJsonError ? "error" : "")" @onclick="FocusJsonEditorAsync">
+                <div class="monaco-host" @ref="jsonMonacoRef" aria-label="JSON document editor"></div>
             </div>
         </div>
         @if (HasJsonError && !string.IsNullOrEmpty(jsonError))
@@ -961,25 +958,9 @@
             </div>
         </div>
         <div class="panel-body">
-            @if (HasTyped || HasPathError)
-            {
-                <div class="editor-surface result-surface @(HasPathError ? "error" : "")">
-                    <pre class="editor-output">@VisibleResultDisplayText</pre>
-                </div>
-
-                @if (HasMoreResultLines)
-                {
-                    <button class="btn result-load-more" @onclick="LoadMoreResultLines" title="Load more lines from local result data">
-                        Load More
-                    </button>
-                }
-            }
-            else
-            {
-                <div class="result-empty">
-                    Enter a JSON document and a JSONPath expression to evaluate
-                </div>
-            }
+            <div class="editor-surface result-surface @(HasPathError ? "error" : "")">
+                <div class="monaco-host" @ref="resultMonacoRef" aria-label="Evaluation results editor"></div>
+            </div>
         </div>
     </div>
 </div>

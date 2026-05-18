@@ -79,9 +79,25 @@
 
                 target.scrollTop = source.scrollTop;
                 target.scrollLeft = source.scrollLeft;
+            },
+            scrollToLine: function (editorElement, targetLine, lineHeightPx) {
+                if (!editorElement) {
+                    return;
+                }
+
+                var styles = window.getComputedStyle(editorElement);
+                var visibleHeight = editorElement.clientHeight;
+                var paddingTop = Math.max(
+                    parseFloat(styles.paddingTop || '0'),
+                    Math.max(0, visibleHeight / 2 - lineHeightPx / 2));
+                var top = paddingTop + ((targetLine - 1) * lineHeightPx);
+                var scrollTarget = top - visibleHeight / 2 + lineHeightPx / 2;
+                editorElement.scrollTop = Math.max(0, scrollTarget);
             }
         };
     </script>
+    <script src="https://cdn.jsdelivr.net/npm/monaco-editor@0.52.2/min/vs/loader.js"></script>
+    <script src="js/monacoInterop.js"></script>
     <script src="_framework/blazor.webassembly.js"></script>
 </body>
 
