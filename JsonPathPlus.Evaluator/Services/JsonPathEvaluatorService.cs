@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Text.RegularExpressions;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -22,7 +23,9 @@ public class JsonPathEvaluatorService
         List<JsonNode?> AllMatches,
         List<string> AllMatchPaths,
         string? Error,
-        int MatchCount)
+        int MatchCount,
+        int? JsonErrorLine = null,
+        int? JsonErrorColumn = null)
     {
         public JsonNode? FirstMatch => MatchCount > 0 ? AllMatches[0] : null;
     }
@@ -42,11 +45,20 @@ public class JsonPathEvaluatorService
         }
         catch (JsonException ex)
         {
+            var line = ex.LineNumber.HasValue ? (int)ex.LineNumber.Value + 1 : (int?)null;
+            var column = ex.BytePositionInLine.HasValue ? (int)ex.BytePositionInLine.Value + 1 : (int?)null;
+            var cleanMessage = BuildJsonErrorMessage(ex.Message);
+            var position = line.HasValue && column.HasValue
+                ? $" at line {line.Value}, column {column.Value}"
+                : string.Empty;
+
             return new EvaluationResult(
                 new List<JsonNode?>(),
                 new List<string>(),
-                $"Invalid JSON: {ex.Message}",
-                0);
+                $"Invalid JSON{position}: {cleanMessage}",
+                0,
+                line,
+                column);
         }
 
         // Handle null/root path: return entire document
@@ -118,6 +130,20 @@ public class JsonPathEvaluatorService
                 $"Error: {ex.Message}",
                 0);
         }
+    }
+
+    private static string BuildJsonErrorMessage(string message)
+    {
+        if (string.IsNullOrWhiteSpace(message))
+        {
+            return "The document is not valid JSON.";
+        }
+
+        return Regex.Replace(
+            message,
+            @"\s*LineNumber:\s*\d+\s*\|\s*BytePositionInLine:\s*\d+\.?\s*$",
+            string.Empty,
+            RegexOptions.CultureInvariant);
     }
 
     /// <summary>

@@ -16,7 +16,7 @@
   </ItemGroup>
 
   <ItemGroup Condition="!Exists('..\..\JsonPathPlus\JsonPathPlus.csproj')">
-    <PackageReference Include="JsonPathPlus" Version="1.2.0" />
+    <PackageReference Include="JsonPathPlus" Version="1.3.0" />
   </ItemGroup>
 
 </Project>
