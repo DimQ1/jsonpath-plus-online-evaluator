@@ -1,6 +1,6 @@
 /* ===== Reset & Base ===== */
 /* Deployment trigger: keep workflow path filter active for publish runs. */
-/* Deployment trigger #4: peaceiris gh-pages approach. */
+/* Deployment trigger #5: net10.0 build verified. */
 *, *::before, *::after {
     box-sizing: border-box;
     margin: 0;

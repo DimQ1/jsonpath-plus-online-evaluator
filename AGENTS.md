@@ -2,9 +2,9 @@
 
 ## Project Scope
 - Interactive Blazor WebAssembly JSONPath evaluator, inspired by [jsonpath.com](https://jsonpath.com/).
-- Target framework: net8.0.
+- Target framework: net10.0.
 - Live site: [dimq1.github.io/jsonpath-plus-online-evaluator](https://dimq1.github.io/jsonpath-plus-online-evaluator/)
-- Consumes [JsonPathPlus](https://www.nuget.org/packages/JsonPathPlus) v1.0.0 for JSON path evaluation.
+- Consumes [JsonPathPlus](https://www.nuget.org/packages/JsonPathPlus) v1.2.0 for JSON path evaluation.
 - Sibling workspace: JsonPathPlus library at `../JsonPathPlus`.
 
 ## Start Here
@@ -13,7 +13,7 @@
 
 ## Build And Run
 - Build: `dotnet build JsonPathPlus.Evaluator/JsonPathPlus.Evaluator.csproj`
-- Run dev server: `dotnet run --project JsonPathPlus.Evaluator/JsonPathPlus.Evaluator.csproj --framework net8.0`
+- Run dev server: `dotnet run --project JsonPathPlus.Evaluator/JsonPathPlus.Evaluator.csproj --framework net10.0`
 - Publish for prod: `dotnet publish JsonPathPlus.Evaluator/JsonPathPlus.Evaluator.csproj -c Release -o publish`
 
 ## Architecture
