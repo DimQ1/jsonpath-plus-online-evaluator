@@ -1,0 +1,21 @@
+# Build output
+**/bin/
+**/obj/
+**/publish/
+
+# Test and local runtime artifacts
+**/TestResults/
+.local-run/
+JsonPathPlus.Evaluator/artifacts/
+
+# IDE
+.vs/
+.vscode/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+# OS
+.DS_Store
+Thumbs.db
