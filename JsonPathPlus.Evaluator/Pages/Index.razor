@@ -279,7 +279,7 @@
     private async Task ClearHistoryAsync()
     {
         historyEntries.Clear();
-        await JS.InvokeVoidAsync("eval", $"localStorage.removeItem('{LocalStorageHistoryKey}')");
+        await JS.InvokeVoidAsync("jsonPathPlusMonaco.setLocalStorage", LocalStorageHistoryKey, "");
         showHistory = false;
         ShowToast("History cleared");
     }
@@ -332,26 +332,24 @@
     // ===== History Persistence =====
     private async Task AddHistoryEntryAsync()
     {
-        if (string.IsNullOrWhiteSpace(_pathInput) || !IsPathValid(_pathInput))
+        // Only save paths that are valid and were successfully evaluated
+        if (string.IsNullOrWhiteSpace(_pathInput))
             return;
 
-        // Remove duplicate query
-        historyEntries.RemoveAll(e => e.Path == _pathInput);
+        var normalizedPath = _pathInput.Trim();
 
-        var entryId = Guid.NewGuid().ToString("N");
+        // Remove duplicate and bump to front
+        historyEntries.RemoveAll(e => e.Path == normalizedPath);
 
-        // Add to front
         historyEntries.Insert(0, new HistoryEntry(
-            entryId,
-            _pathInput,
+            Guid.NewGuid().ToString("N"),
+            normalizedPath,
             DateTime.Now.ToString("HH:mm:ss"),
             matchCount));
 
-        // Trim
-        if (historyEntries.Count > MaxHistoryEntries)
-        {
-            historyEntries = historyEntries.Take(MaxHistoryEntries).ToList();
-        }
+        // Trim to max
+        while (historyEntries.Count > MaxHistoryEntries)
+            historyEntries.RemoveAt(historyEntries.Count - 1);
 
         await SaveHistoryAsync();
     }
@@ -362,16 +360,19 @@
         {
             var json = System.Text.Json.JsonSerializer.Serialize(
                 historyEntries.Select(e => new { id = e.Id, p = e.Path, t = e.Timestamp, m = e.MatchCount }));
-            await JS.InvokeVoidAsync("eval", $"localStorage.setItem('{LocalStorageHistoryKey}', `{json.Replace("\\", "\\\\").Replace("`", "\\`")}`)");
+            await JS.InvokeVoidAsync("jsonPathPlusMonaco.setLocalStorage", LocalStorageHistoryKey, json);
         }
-        catch { }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"SaveHistoryAsync failed: {ex.Message}");
+        }
     }
 
     private async Task LoadHistoryAsync()
     {
         try
         {
-            var raw = await JS.InvokeAsync<string>("eval", $"localStorage.getItem('{LocalStorageHistoryKey}')");
+            var raw = await JS.InvokeAsync<string>("jsonPathPlusMonaco.getLocalStorage", LocalStorageHistoryKey);
             if (string.IsNullOrEmpty(raw))
                 return;
 
@@ -512,7 +513,7 @@
         debounceTimer?.Dispose();
         debounceTimer = new Timer(async _ =>
         {
-            await InvokeAsync(() => RequestEvaluationAsync(persistResult: false));
+            await InvokeAsync(() => RequestEvaluationAsync(persistResult: true));
         }, null, 500, Timeout.Infinite);
     }
 

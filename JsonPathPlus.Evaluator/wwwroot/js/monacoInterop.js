@@ -837,6 +837,18 @@
             var json = jsonModel.getValue();
             return window.jsonPathWorkerClient.evaluate(json, path, validateJson);
         },
+        setLocalStorage: function (key, value) {
+            try {
+                localStorage.setItem(key, value);
+            } catch (e) { /* quota exceeded or unavailable */ }
+        },
+        getLocalStorage: function (key) {
+            try {
+                return localStorage.getItem(key) || '';
+            } catch (e) {
+                return '';
+            }
+        },
         dispose: function () {
             detachPathInput();
             disposeContextMenuFilter();
