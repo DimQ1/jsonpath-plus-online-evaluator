@@ -497,55 +497,30 @@ html, body {
     flex-direction: column;
 }
 
-.jsonpath-hover-code pre {
-    /* remove the old padding-right workaround; button is now below */
+.jsonpath-hover-clickable {
+    cursor: pointer;
 }
 
-.jsonpath-hover-actions {
-    display: flex;
-    justify-content: flex-end;
-    margin: 4px 0 0;
-}
-
-.jsonpath-hover-code .jsonpath-hover-actions {
-    /* in flow below code, no absolute positioning */
-    margin: 4px 0 0;
-    position: static;
-    top: auto;
-    right: auto;
-    z-index: auto;
-}
-
-.jsonpath-hover-copy-button {
+.jsonpath-hover-copy-feedback {
     display: inline-flex;
     align-items: center;
-    justify-content: center;
-    padding: 4px 10px;
-    font-size: 12px;
-    font-family: inherit;
-    border: 1px solid var(--color-border);
-    border-radius: 6px;
-    background: var(--color-surface);
-    color: var(--color-text);
-    cursor: pointer;
-    transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
-}
-
-.jsonpath-hover-copy-button:hover {
-    background: #f0f0f0;
-    border-color: #bbb;
-}
-
-.jsonpath-hover-copy-button[data-state="copied"] {
-    background: rgba(22, 163, 74, 0.1);
-    border-color: rgba(22, 163, 74, 0.35);
+    gap: 4px;
+    margin-top: 4px;
+    font-size: 11px;
+    font-weight: 500;
     color: var(--color-success);
+    opacity: 0;
+    animation: copyFeedbackIn 0.2s ease forwards, copyFeedbackOut 0.3s ease 1.2s forwards;
 }
 
-.jsonpath-hover-copy-button[data-state="failed"] {
-    background: rgba(220, 38, 38, 0.08);
-    border-color: rgba(220, 38, 38, 0.3);
-    color: var(--color-error);
+@keyframes copyFeedbackIn {
+    from { opacity: 0; transform: translateY(-2px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes copyFeedbackOut {
+    from { opacity: 1; }
+    to { opacity: 0; }
 }
 
 .jsonpath-hover-value {

@@ -140,29 +140,63 @@
     }
 
     function onDelegatedJsonPathCopyPointerDown(event) {
-        var button = getJsonPathCopyButton(event.target);
-        if (!button) {
+        var hover = getJsonPathCopyHover(event.target);
+        if (!hover) {
             return;
         }
 
-        handleJsonPathCopyInteraction(event, true, button);
+        event.preventDefault();
+        event.stopPropagation();
+
+        var jsonPath = hover.dataset ? hover.dataset.jsonPath || '' : '';
+        if (!jsonPath) {
+            return;
+        }
+
+        writeTextToClipboard(jsonPath)
+            .then(function () {
+                showCopyFeedback(hover);
+            })
+            .catch(function () { });
     }
 
     function onDelegatedJsonPathCopyClicked(event) {
-        var button = getJsonPathCopyButton(event.target);
-        if (!button) {
-            return;
+        // Already handled by pointerdown; suppress click.
+        var hover = getJsonPathCopyHover(event.target);
+        if (hover) {
+            event.preventDefault();
+            event.stopPropagation();
         }
-
-        handleJsonPathCopyInteraction(event, false, button);
     }
 
-    function getJsonPathCopyButton(target) {
+    function getJsonPathCopyHover(target) {
         if (!target || !target.closest) {
             return null;
         }
 
-        return target.closest('.jsonpath-hover-copy-button');
+        return target.closest('.jsonpath-hover-clickable');
+    }
+
+    function showCopyFeedback(hover) {
+        if (!hover) {
+            return;
+        }
+
+        var existing = hover.querySelector('.jsonpath-hover-copy-feedback');
+        if (existing) {
+            existing.remove();
+        }
+
+        var feedback = document.createElement('span');
+        feedback.className = 'jsonpath-hover-copy-feedback';
+        feedback.textContent = '\u2714 Copied!';
+        hover.appendChild(feedback);
+
+        window.setTimeout(function () {
+            if (feedback.parentNode) {
+                feedback.remove();
+            }
+        }, 1500);
     }
 
     function enhanceVisibleJsonPathHover() {
@@ -197,82 +231,15 @@
             }
 
             codeHover.classList.add('jsonpath-hover-code');
+            codeHover.classList.add('jsonpath-hover-clickable');
+            codeHover.dataset.jsonPath = jsonPath;
 
-            var actionRow = codeHover.querySelector('.jsonpath-hover-actions');
-            if (!actionRow) {
-                actionRow = document.createElement('div');
-                actionRow.className = 'jsonpath-hover-actions';
-
-                var copyButton = document.createElement('button');
-                copyButton.type = 'button';
-                copyButton.className = 'jsonpath-hover-copy-button';
-                copyButton.textContent = 'Copy';
-
-                actionRow.appendChild(copyButton);
-                codeHover.appendChild(actionRow);
-            }
-
-            var button = actionRow.querySelector('.jsonpath-hover-copy-button');
-            if (button && button.dataset.jsonPath !== jsonPath) {
-                button.dataset.jsonPath = jsonPath;
+            // Remove leftover button DOM from previous iterations
+            var oldActions = codeHover.querySelector('.jsonpath-hover-actions');
+            if (oldActions) {
+                oldActions.remove();
             }
         }
-    }
-
-    function handleJsonPathCopyInteraction(event, isPointerDown, buttonOverride) {
-        if (!event) {
-            return;
-        }
-
-        event.preventDefault();
-        event.stopPropagation();
-
-        var button = buttonOverride || event.currentTarget;
-        if (!button) {
-            return;
-        }
-
-        // Pointer interactions in Monaco hover are intercepted before click completes,
-        // so perform the copy on pointerdown and ignore the follow-up click.
-        if (!isPointerDown && button.dataset && button.dataset.skipNextClick === 'true') {
-            button.dataset.skipNextClick = 'false';
-            return;
-        }
-
-        if (isPointerDown && button.dataset) {
-            button.dataset.skipNextClick = 'true';
-        }
-
-        var jsonPath = button.dataset ? button.dataset.jsonPath || '' : '';
-        if (!jsonPath) {
-            return;
-        }
-
-        writeTextToClipboard(jsonPath)
-            .then(function () {
-                setCopyButtonState(button, 'Copied');
-            })
-            .catch(function () {
-                setCopyButtonState(button, 'Failed');
-            });
-    }
-
-    function setCopyButtonState(button, label) {
-        if (!button) {
-            return;
-        }
-
-        if (button._resetLabelTimer) {
-            window.clearTimeout(button._resetLabelTimer);
-        }
-
-        button.textContent = label;
-        button.dataset.state = label.toLowerCase();
-        button._resetLabelTimer = window.setTimeout(function () {
-            button.textContent = 'Copy';
-            button.dataset.state = 'idle';
-            button._resetLabelTimer = 0;
-        }, 1600);
     }
 
     function writeTextToClipboard(text) {
