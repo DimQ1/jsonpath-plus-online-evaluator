@@ -394,6 +394,9 @@ html, body {
     color: var(--color-text-secondary);
     text-transform: uppercase;
     letter-spacing: 0.5px;
+    height: 42px;
+    flex-shrink: 0;
+    gap: 8px;
 }
 
 .panel-header .match-count {
@@ -490,25 +493,27 @@ html, body {
 }
 
 .jsonpath-hover-code {
-    position: relative;
+    display: flex;
+    flex-direction: column;
 }
 
 .jsonpath-hover-code pre {
-    padding-right: 5rem;
+    /* remove the old padding-right workaround; button is now below */
 }
 
 .jsonpath-hover-actions {
     display: flex;
     justify-content: flex-end;
-    margin: 0 0 6px;
+    margin: 4px 0 0;
 }
 
 .jsonpath-hover-code .jsonpath-hover-actions {
-    position: absolute;
-    top: 6px;
-    right: 6px;
-    margin: 0;
-    z-index: 1;
+    /* in flow below code, no absolute positioning */
+    margin: 4px 0 0;
+    position: static;
+    top: auto;
+    right: auto;
+    z-index: auto;
 }
 
 .jsonpath-hover-copy-button {
