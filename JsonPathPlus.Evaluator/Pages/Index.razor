@@ -289,14 +289,13 @@
     {
         try
         {
-            // Read JSON directly from the Monaco model — no stale copy in .NET.
             var currentJson = await JS.InvokeAsync<string>("jsonPathPlusMonaco.getJsonValue");
             var state = System.Text.Json.JsonSerializer.Serialize(new
             {
                 json = currentJson,
                 path = _pathInput
             });
-            await JS.InvokeVoidAsync("eval", $"localStorage.setItem('{LocalStorageStateKey}', `{state.Replace("\\", "\\\\").Replace("`", "\\`")}`)");
+            await JS.InvokeVoidAsync("jsonPathPlusMonaco.setLocalStorage", LocalStorageStateKey, state);
         }
         catch { /* localStorage may be unavailable */ }
     }
@@ -305,7 +304,7 @@
     {
         try
         {
-            var state = await JS.InvokeAsync<string>("eval", $"localStorage.getItem('{LocalStorageStateKey}')");
+            var state = await JS.InvokeAsync<string>("jsonPathPlusMonaco.getLocalStorage", LocalStorageStateKey);
             if (string.IsNullOrEmpty(state))
                 return false;
 
@@ -813,7 +812,7 @@
         _pathInput = value;
         pathError = null;
         hasTyped = true;
-        return RequestEvaluationAsync(persistResult: false);
+        return RequestEvaluationAsync(persistResult: true);
     }
 
     private bool TryValidatePath(out string? error)
