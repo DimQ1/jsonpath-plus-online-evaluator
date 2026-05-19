@@ -304,6 +304,7 @@ html, body {
     color: var(--color-text-secondary);
     text-transform: uppercase;
     letter-spacing: 0.5px;
+    height: auto;
 }
 
 .history-sidebar .panel-body {
