@@ -289,9 +289,11 @@
     {
         try
         {
+            // Read JSON directly from the Monaco model — no stale copy in .NET.
+            var currentJson = await JS.InvokeAsync<string>("jsonPathPlusMonaco.getJsonValue");
             var state = System.Text.Json.JsonSerializer.Serialize(new
             {
-                json = _jsonInput,
+                json = currentJson,
                 path = _pathInput
             });
             await JS.InvokeVoidAsync("eval", $"localStorage.setItem('{LocalStorageStateKey}', `{state.Replace("\\", "\\\\").Replace("`", "\\`")}`)");
@@ -437,7 +439,9 @@
     {
         try
         {
-            var json = Uri.EscapeDataString(_jsonInput);
+            // Read JSON directly from the Monaco model — no stale copy in .NET.
+            var currentJson = await JS.InvokeAsync<string>("jsonPathPlusMonaco.getJsonValue");
+            var json = Uri.EscapeDataString(currentJson);
             var path = Uri.EscapeDataString(_pathInput);
             var origin = await JS.InvokeAsync<string>("eval", "window.location.origin + window.location.pathname");
             var url = $"{origin}#json={json}&path={path}";
@@ -627,9 +631,10 @@
 
             try
             {
+                // Read JSON directly from the Monaco model on the JS side — no
+                // JS↔.NET marshaling of the full document payload.
                 var serializedResult = await JS.InvokeAsync<string>(
-                    "jsonPathWorkerClient.evaluate",
-                    _jsonInput,
+                    "jsonPathPlusMonaco.evaluateCurrent",
                     _pathInput,
                     validateJson);
 
@@ -785,14 +790,14 @@
     }
 
     [JSInvokable]
-    public Task OnJsonDocumentChanged(string value)
+    public Task OnJsonDocumentTouched()
     {
-        if (_jsonInput == value)
-        {
-            return Task.CompletedTask;
-        }
-
-        jsonInput = value;
+        // The JSON content stays in the Monaco model on the JS side — no string is marshaled.
+        // We only mark that the document has been edited so the next evaluation re-validates.
+        jsonChangedSinceLastEvaluation = true;
+        jsonError = null;
+        hasTyped = true;
+        DebounceEvaluate();
         return Task.CompletedTask;
     }
 

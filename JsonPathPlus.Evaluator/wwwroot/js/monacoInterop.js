@@ -18,6 +18,9 @@
     var suppressJsonChange = false;
     var suppressPathInputChange = false;
     var contextMenuObserver = null;
+    var jsonChangeTimer = null;
+    var pendingJsonNotification = false;
+    var jsonChangeInProgress = false;
 
     function hideChangeAllOccurrencesMenuItem() {
         var targets = document.querySelectorAll('div, span, a, li');
@@ -308,6 +311,46 @@
                 reject(error);
             }
         });
+    }
+
+    function clearJsonChangeTimer() {
+        if (!jsonChangeTimer) {
+            return;
+        }
+
+        window.clearTimeout(jsonChangeTimer);
+        jsonChangeTimer = null;
+    }
+
+    function notifyJsonDocumentChanged() {
+        if (!dotNetReference || jsonChangeInProgress) {
+            return;
+        }
+
+        jsonChangeInProgress = true;
+        try {
+            // Only send a flag — no JSON payload. The data stays in the Monaco model.
+            dotNetReference.invokeMethodAsync('OnJsonDocumentTouched')
+                .catch(function () {
+                    // Silently recover from interop failures (e.g., during disposal)
+                })
+                .then(function () {
+                    jsonChangeInProgress = false;
+                    if (pendingJsonNotification) {
+                        pendingJsonNotification = false;
+                        scheduleJsonChangeNotification();
+                    }
+                });
+        } catch (e) {
+            jsonChangeInProgress = false;
+        }
+    }
+
+    function scheduleJsonChangeNotification() {
+        clearJsonChangeTimer();
+        jsonChangeTimer = window.setTimeout(function () {
+            notifyJsonDocumentChanged();
+        }, 200);
     }
 
     function clearPathInputTimer() {
@@ -709,7 +752,11 @@
             jsonModel = getOrCreateModel(monacoInstance, 'file:///json', initialJson || '');
             resultModel = getOrCreateModel(monacoInstance, 'file:///result', initialResult || '');
 
-            jsonEditor = monacoInstance.editor.create(jsonElement, Object.assign(editorOptions(false), { model: jsonModel }));
+            jsonEditor = monacoInstance.editor.create(jsonElement, Object.assign(editorOptions(false), {
+                model: jsonModel,
+                formatOnPaste: false,
+                formatOnType: false
+            }));
             resultEditor = monacoInstance.editor.create(resultElement, Object.assign(editorOptions(true), { model: resultModel }));
             ensureContextMenuFilter();
             ensureHoverEnhancer();
@@ -743,7 +790,13 @@
                     window.jsonPathWorkerClient.cancelActive();
                 }
 
-                dotNetReference.invokeMethodAsync('OnJsonDocumentChanged', jsonModel.getValue());
+                if (jsonChangeInProgress) {
+                    // Mark pending so we re-fire after the current call completes.
+                    pendingJsonNotification = true;
+                    return;
+                }
+
+                scheduleJsonChangeNotification();
             });
         },
         setPathValue: function (value) {
@@ -804,10 +857,24 @@
                 jsonEditor.focus();
             }
         },
+        getJsonValue: function () {
+            return jsonModel ? jsonModel.getValue() : '';
+        },
+        evaluateCurrent: function (path, validateJson) {
+            if (!jsonModel || !window.jsonPathWorkerClient || typeof window.jsonPathWorkerClient.evaluate !== 'function') {
+                return Promise.reject(new Error('Worker client is not available.'));
+            }
+
+            var json = jsonModel.getValue();
+            return window.jsonPathWorkerClient.evaluate(json, path, validateJson);
+        },
         dispose: function () {
             detachPathInput();
             disposeContextMenuFilter();
             disposeHoverEnhancer();
+            clearJsonChangeTimer();
+            pendingJsonNotification = false;
+            jsonChangeInProgress = false;
 
             if (jsonEditor) {
                 jsonEditor.dispose();
