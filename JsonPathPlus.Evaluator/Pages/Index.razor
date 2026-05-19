@@ -556,6 +556,7 @@
         if (isEvaluationRunning)
         {
             await CancelActiveWorkerEvaluationAsync();
+            // Let the running loop pick up the pending evaluation
             return;
         }
 
@@ -582,7 +583,12 @@
         }
         finally
         {
-            if (!evaluationPending)
+            if (evaluationPending)
+            {
+                // More work arrived while running; restart the loop
+                _ = RequestEvaluationAsync(persistResult: pendingEvaluationPersistence);
+            }
+            else
             {
                 isEvaluating = false;
                 RefreshResultDisplayText();
