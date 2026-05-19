@@ -462,7 +462,7 @@
             var file = e.File;
             if (file is null || file.Size == 0) return;
 
-            using var stream = file.OpenReadStream(maxAllowedSize: 10 * 1024 * 1024);
+            using var stream = file.OpenReadStream(maxAllowedSize: 1000L * 1024 * 1024);
             using var reader = new StreamReader(stream);
             _jsonInput = await reader.ReadToEndAsync();
             await SetJsonEditorValueAsync(_jsonInput);

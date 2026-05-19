@@ -34,7 +34,7 @@
 - **Debounced evaluation**: 300ms `Timer` between keystroke and re-evaluation
 - **URL sharing**: `#json={escaped}&path={escaped}` hash encoding; restored on init
 - **Error routing**: `jsonError` for invalid JSON, `pathError` for invalid path expression
-- **File import**: Blazor `InputFile` component, max 10MB
+- **File import**: Blazor `InputFile` component, max 1000 MB
 - **JS interop**: clipboard API, URL hash parsing, file picker trigger
 
 ## Deployment

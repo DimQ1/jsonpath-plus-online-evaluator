@@ -567,7 +567,9 @@
             hideCursorInOverviewRuler: true,
             occurrencesHighlight: 'off',
             selectionHighlight: false,
-            renderLineHighlight: 'line'
+            renderLineHighlight: 'line',
+            maxTokenizationLineLength: 200000,
+            largeFileOptimizations: true
         };
     }
 
