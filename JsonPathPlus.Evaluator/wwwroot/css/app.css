@@ -117,6 +117,32 @@ html, body {
     gap: 8px;
 }
 
+@media (max-width: 480px) {
+    .evaluator-header {
+        padding: 8px 12px;
+        gap: 8px;
+    }
+
+    .evaluator-title {
+        font-size: 15px;
+    }
+
+    .evaluator-title .icon {
+        font-size: 18px;
+    }
+
+    .header-actions {
+        width: 100%;
+        justify-content: flex-end;
+        flex-wrap: wrap;
+    }
+
+    .header-actions .btn {
+        padding: 6px 10px;
+        font-size: 12px;
+    }
+}
+
 .btn .badge {
     background: var(--color-primary);
     color: white;
@@ -143,6 +169,7 @@ html, body {
     cursor: pointer;
     transition: all 0.15s ease;
     white-space: nowrap;
+    min-height: 32px;
 }
 
 .btn:hover {
@@ -238,6 +265,33 @@ html, body {
 
 .match-mode-toggle button:hover:not(.active) {
     background: #f0f0f0;
+}
+
+@media (max-width: 480px) {
+    .path-input-bar {
+        padding: 8px 12px;
+        gap: 8px;
+        flex-wrap: wrap;
+    }
+
+    .path-input-bar label {
+        width: 100%;
+    }
+
+    .path-input {
+        font-size: 13px;
+        padding: 10px 12px;
+    }
+
+    .match-mode-toggle {
+        flex: 1;
+    }
+
+    .match-mode-toggle button {
+        flex: 1;
+        text-align: center;
+        padding: 8px 10px;
+    }
 }
 
 /* ===== Main Content Panels ===== */
@@ -467,6 +521,29 @@ html, body {
     padding: 12px;
 }
 
+@media (max-width: 480px) {
+    .panel-body {
+        padding: 8px;
+    }
+
+    .panel-header {
+        padding: 6px 10px;
+        font-size: 11px;
+        height: 36px;
+        gap: 4px;
+    }
+
+    .panel-header .match-count {
+        font-size: 10px;
+        padding: 1px 6px;
+    }
+
+    .header-toggle {
+        font-size: 10px;
+        gap: 4px;
+    }
+}
+
 .editor-surface {
     height: 100%;
     min-height: 0;
@@ -654,6 +731,19 @@ html, body {
         border-right: none;
         border-bottom: 1px solid var(--color-border);
     }
+
+    .panels-container {
+        grid-template-rows: 1fr 1fr;
+    }
+
+    .path-input-bar {
+        padding: 8px 16px;
+        gap: 8px;
+    }
+
+    .evaluator-header {
+        padding: 8px 16px;
+    }
 }
 
 /* ===== Error Message ===== */
@@ -696,6 +786,24 @@ html, body {
 
 .syntax-reference summary:hover {
     color: var(--color-text);
+}
+
+.syntax-reference .table-wrapper {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+}
+
+@media (max-width: 480px) {
+    .syntax-reference summary {
+        padding: 10px 12px;
+        font-size: 12px;
+    }
+
+    .syntax-table th,
+    .syntax-table td {
+        padding: 6px 10px;
+        font-size: 11px;
+    }
 }
 
 .syntax-table {
