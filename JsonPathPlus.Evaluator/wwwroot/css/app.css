@@ -257,7 +257,7 @@ html, body {
     border: 1px solid var(--color-border);
     border-radius: var(--radius);
     overflow: hidden;
-    flex: 1;
+    flex: 1 1 100%;
 }
 
 .match-mode-toggle button {
@@ -304,12 +304,11 @@ html, body {
     }
 
     .match-mode-toggle {
-        flex: 0;
+        flex: none;
     }
 
     .match-mode-toggle button {
         padding: 6px 14px;
-        flex: 0;
         text-align: inherit;
     }
 }
