@@ -1,0 +1,69 @@
+// Validating benchmarks:
+// ***** BenchmarkRunner: Start   *****
+// ***** Found 8 benchmark(s) in total *****
+// ***** Building 1 exe(s) in Parallel: Start   *****
+Unable to find .sln or .csproj file. Will use current directory E:\Learning\jsonpath-plus-online-evaluator to search for project file. If you don't use .sln file on purpose it should not be a problem.
+// ***** Done, took 00:00:00 (0.13 sec)   *****
+// Found 8 benchmarks:
+//   JsonPathExtractionBenchmarks.Stream_First_SimpleProperty: DefaultJob
+//   JsonPathExtractionBenchmarks.Stream_First_ArrayIndex: DefaultJob
+//   JsonPathExtractionBenchmarks.Stream_First_Wildcard: DefaultJob
+//   JsonPathExtractionBenchmarks.Stream_First_RecursiveDescent: DefaultJob
+//   JsonPathExtractionBenchmarks.Stream_All_Wildcard: DefaultJob
+//   JsonPathExtractionBenchmarks.Stream_All_Range: DefaultJob
+//   JsonPathExtractionBenchmarks.Stream_RootArray_First_Index: DefaultJob
+//   JsonPathExtractionBenchmarks.Stream_RootArray_All_Wildcard: DefaultJob
+
+Setup power plan (GUID: 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c FriendlyName: High performance)
+// Generate Exception: System.NotSupportedException: Unable to find JsonPathPlus.Benchmarks in E:\Learning\jsonpath-plus-online-evaluator and its subfolders. Most probably the name of output exe is different than the name of the .(c/f)sproj
+   at BenchmarkDotNet.Toolchains.CsProj.CsProjGenerator.GetProjectFilePath(Type benchmarkTarget, ILogger logger)
+   at BenchmarkDotNet.Toolchains.CsProj.CsProjGenerator.GenerateProject(BuildPartition buildPartition, ArtifactsPaths artifactsPaths, ILogger logger)
+   at BenchmarkDotNet.Toolchains.GeneratorBase.GenerateProject(BuildPartition buildPartition, ILogger logger, String rootArtifactsFolderPath)
+
+// BenchmarkDotNet has failed to build the auto-generated boilerplate code.
+// It can be found in E:\Learning\JsonPathPlus\tests\JsonPathPlus.Benchmarks\bin\Release\net8.0\e4ec7fd8-1024-469d-b4d9-72d3b9429d88
+// Please follow the troubleshooting guide: https://benchmarkdotnet.org/articles/guides/troubleshooting.html
+
+// ** Remained 0 (0.0%) benchmark(s) to run. Estimated finish 2026-05-19 12:51 (0h 0m from now) **
+Successfully reverted power plan (GUID: 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c FriendlyName: High performance)
+Run time: 00:00:00 (0.52 sec), executed benchmarks: 0
+
+// ***** BenchmarkRunner: Finish  *****
+
+// * Export *
+  BenchmarkDotNet.Artifacts\results\JsonPathPlus.Benchmarks.JsonPathExtractionBenchmarks-report.csv
+  BenchmarkDotNet.Artifacts\results\JsonPathPlus.Benchmarks.JsonPathExtractionBenchmarks-report-github.md
+  BenchmarkDotNet.Artifacts\results\JsonPathPlus.Benchmarks.JsonPathExtractionBenchmarks-report.html
+
+// * Detailed results *
+JsonPathExtractionBenchmarks.Stream_First_SimpleProperty: DefaultJob
+Runtime = ; GC = 
+There are not any results runs
+
+// * Summary *
+
+BenchmarkDotNet v0.14.0, Windows 11 (10.0.26200.7840)
+Unknown processor
+.NET SDK 10.0.300
+  [Host] : .NET 8.0.27 (8.0.2726.22922), X64 RyuJIT AVX2
+
+
+| Method                      | Mean | Error |
+|---------------------------- |-----:|------:|
+| Stream_First_SimpleProperty |   NA |    NA |
+
+Benchmarks with issues:
+  JsonPathExtractionBenchmarks.Stream_First_SimpleProperty: DefaultJob
+
+// * Legends *
+  Mean  : Arithmetic mean of all measurements
+  Error : Half of 99.9% confidence interval
+  1 ns  : 1 Nanosecond (0.000000001 sec)
+
+// * Diagnostic Output - MemoryDiagnoser *
+
+
+// ***** BenchmarkRunner: End *****
+Global total time: 00:00:01 (1.02 sec), executed benchmarks: 0
+// * Artifacts cleanup *
+Artifacts cleanup is finished

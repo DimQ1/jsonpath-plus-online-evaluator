@@ -71,6 +71,7 @@
         (@"$.store.book[?(@.isbn)].title", "Existence filter (has property)"),
         (@"$.store.book[?(@.price < 10)].title", "Comparison filter (<, >, <=, >=, ==, !=)"),
         (@"$.store.book[?(@.price > 10 && @.price < 40)].title", "Logical filter (&&, ||)"),
+        (@"$.store.book[?(@.price != 45.00)].title", "Not-equals filter (!=)"),
         (@"$.store.book[(@.length-1)].title", "Computed index expression"),
     };
 
@@ -975,7 +976,7 @@
     <div class="evaluator-title">
         <span class="icon">&#x1F50D;</span>
         <span>JsonPathPlus Online Evaluator</span>
-        <span class="version">v1.1.0</span>
+        <span class="version">v1.2.0</span>
     </div>
     <div class="header-actions">
         <button class="btn @(showHistory ? "active" : "")" @onclick="ToggleHistory" title="Evaluation history">

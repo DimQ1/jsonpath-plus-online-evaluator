@@ -17,9 +17,9 @@ namespace JsonPathPlus.Evaluator.Services;
 /// </summary>
 public class JsonPathEvaluatorService
 {
-    private const int MaxSinglePreviewBytes = 64 * 1024;
-    private const int MaxAllResultsPreviewCharacters = 180_000;
-    private const int MaxAllPathsPreviewCharacters = 48_000;
+    private const int MaxSinglePreviewBytes = 256 * 1024;
+    private const int MaxAllResultsPreviewCharacters = 500_000;
+    private const int MaxAllPathsPreviewCharacters = 150_000;
     private const string OutputTruncationMessage = "Output truncated to keep the browser responsive.";
 
     private static readonly JsonSerializerOptions PrettyJsonOptions = new()
@@ -139,11 +139,17 @@ public class JsonPathEvaluatorService
             return "The document is not valid JSON.";
         }
 
-        return Regex.Replace(
-            message,
-            @"\s*LineNumber:\s*\d+\s*\|\s*BytePositionInLine:\s*\d+\.?\s*$",
-            string.Empty,
-            RegexOptions.CultureInvariant);
+        // Strip trailing position metadata without Regex allocation
+        var idx = message.LastIndexOf("LineNumber:", StringComparison.Ordinal);
+        if (idx > 0)
+        {
+            // Also trim any leading whitespace before the position info
+            while (idx > 0 && char.IsWhiteSpace(message[idx - 1]))
+                idx--;
+            return message[..idx];
+        }
+
+        return message;
     }
 
     private static string SerializeNodePreview(JsonNode? node, int maxBytes, bool includeTruncationMessage, out bool wasTruncated)
@@ -184,6 +190,7 @@ public class JsonPathEvaluatorService
         }
 
         var preview = bufferWriter.GetText();
+        bufferWriter.Dispose();
         if (!wasTruncated)
         {
             return preview;
@@ -202,12 +209,40 @@ public class JsonPathEvaluatorService
     private static string IndentPreview(string value, int spaces)
     {
         if (string.IsNullOrEmpty(value))
-        {
             return value;
+
+        // Single-line fast path — dominant case for small matches
+        var firstNewline = value.IndexOf('\n');
+        if (firstNewline < 0)
+            return string.Create(spaces + value.Length, (spaces, value), (chars, state) =>
+            {
+                for (int i = 0; i < state.spaces; i++) chars[i] = ' ';
+                state.value.AsSpan().CopyTo(chars[state.spaces..]);
+            });
+
+        // Multi-line: count lines and build with minimal allocations
+        var span = value.AsSpan();
+        var lineCount = 1;
+        for (int i = 0; i < span.Length; i++)
+            if (span[i] == '\n') lineCount++;
+
+        var sb = new StringBuilder(spaces * lineCount + value.Length);
+        foreach (var lineRange in span.EnumerateLines())
+        {
+            sb.Append(' ', spaces);
+            // Trim trailing \r if present
+            var line = lineRange;
+            if (line.Length > 0 && line[^1] == '\r')
+                line = line[..^1];
+            sb.Append(line);
+            sb.Append('\n');
         }
 
-        var indent = new string(' ', spaces);
-        return string.Join(Environment.NewLine, value.Split('\n').Select(line => indent + line.TrimEnd('\r')));
+        // Remove trailing newline
+        if (sb.Length > 0 && sb[^1] == '\n')
+            sb.Length--;
+
+        return sb.ToString();
     }
 
     private static string FinalizeArrayPreview(
@@ -253,9 +288,10 @@ public class JsonPathEvaluatorService
 
     private sealed class EvaluationPreviewBuilder
     {
-        private readonly string serializedPath;
-        private readonly StringBuilder allMatchesBuilder = new();
-        private readonly StringBuilder allPathsBuilder = new();
+        private string? serializedPath;
+        private readonly string rawPath;
+        private readonly StringBuilder allMatchesBuilder = new(capacity: 4096);
+        private readonly StringBuilder allPathsBuilder = new(capacity: 1024);
 
         private int displayedMatchCount;
         private int displayedPathCount;
@@ -265,8 +301,11 @@ public class JsonPathEvaluatorService
 
         public EvaluationPreviewBuilder(string path)
         {
-            serializedPath = JsonSerializer.Serialize(path, PrettyJsonOptions);
+            rawPath = path;
         }
+
+        private string SerializedPath =>
+            serializedPath ??= JsonSerializer.Serialize(rawPath, PrettyJsonOptions);
 
         public string? FirstMatchPreview { get; private set; }
 
@@ -278,7 +317,7 @@ public class JsonPathEvaluatorService
         {
             MatchCount++;
 
-            FirstPathPreview ??= serializedPath;
+            FirstPathPreview ??= SerializedPath;
             FirstMatchPreview ??= SerializeNodePreview(match, MaxSinglePreviewBytes, includeTruncationMessage: true, out _);
 
             if (!stopAppendingMatches)
@@ -357,7 +396,7 @@ public class JsonPathEvaluatorService
             EnsureArrayStarted(allPathsBuilder);
 
             var separatorLength = displayedPathCount > 0 ? 2 : 0;
-            var requiredLength = separatorLength + 2 + serializedPath.Length;
+            var requiredLength = separatorLength + 2 + SerializedPath.Length;
             if (allPathsBuilder.Length + requiredLength > MaxAllPathsPreviewCharacters)
             {
                 stopAppendingPaths = true;
@@ -370,7 +409,7 @@ public class JsonPathEvaluatorService
             }
 
             allPathsBuilder.Append("  ");
-            allPathsBuilder.Append(serializedPath);
+            allPathsBuilder.Append(SerializedPath);
             displayedPathCount++;
         }
 
@@ -383,10 +422,11 @@ public class JsonPathEvaluatorService
         }
     }
 
-    private sealed class LimitedBufferWriter : IBufferWriter<byte>
+    private sealed class LimitedBufferWriter : IBufferWriter<byte>, IDisposable
     {
-        private readonly byte[] buffer;
+        private byte[] buffer;
         private int writtenCount;
+        private readonly int maxBytes;
 
         public LimitedBufferWriter(int maxBytes)
         {
@@ -395,12 +435,13 @@ public class JsonPathEvaluatorService
                 throw new ArgumentOutOfRangeException(nameof(maxBytes));
             }
 
-            buffer = new byte[maxBytes];
+            this.maxBytes = maxBytes;
+            buffer = ArrayPool<byte>.Shared.Rent(maxBytes);
         }
 
         public void Advance(int count)
         {
-            if (count < 0 || writtenCount + count > buffer.Length)
+            if (count < 0 || writtenCount + count > maxBytes)
             {
                 throw new PreviewLimitExceededException();
             }
@@ -423,10 +464,19 @@ public class JsonPathEvaluatorService
         public string GetText()
             => Encoding.UTF8.GetString(buffer, 0, writtenCount);
 
+        public void Dispose()
+        {
+            if (buffer is not null)
+            {
+                ArrayPool<byte>.Shared.Return(buffer);
+                buffer = null!;
+            }
+        }
+
         private void EnsureCapacity(int sizeHint)
         {
             var requiredSize = sizeHint <= 0 ? 1 : sizeHint;
-            if (requiredSize > buffer.Length - writtenCount)
+            if (requiredSize > maxBytes - writtenCount)
             {
                 throw new PreviewLimitExceededException();
             }

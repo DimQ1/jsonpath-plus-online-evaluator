@@ -13,17 +13,17 @@ public sealed class JsonPathEvaluatorServiceTests
     [Fact]
     public async Task EvaluateAsync_WithManyLargeMatches_BoundsWorkerPayload()
     {
-        var json = BuildLargePayloadDocument(itemCount: 120, payloadCharacters: 4_096);
+        var json = BuildLargePayloadDocument(itemCount: 140, payloadCharacters: 4_096);
         var service = new JsonPathEvaluatorService();
 
         var result = await service.EvaluateAsync(json, "$.items[*]");
 
         Assert.Null(result.Error);
-        Assert.Equal(120, result.MatchCount);
+        Assert.Equal(140, result.MatchCount);
         Assert.NotNull(result.FirstMatchPreview);
         Assert.Contains("\"payload\"", result.FirstMatchPreview!, StringComparison.Ordinal);
         Assert.Contains(OutputTruncationMessage, result.AllMatchesPreview, StringComparison.Ordinal);
-        Assert.True(result.AllMatchesPreview.Length <= 185_000, $"All-matches preview length was {result.AllMatchesPreview.Length} characters.");
+        Assert.True(result.AllMatchesPreview.Length <= 505_000, $"All-matches preview length was {result.AllMatchesPreview.Length} characters.");
 
         var workerPayload = new JsonPathWorkerEvaluationResult(
             result.FirstMatchPreview,
@@ -43,17 +43,17 @@ public sealed class JsonPathEvaluatorServiceTests
     [Fact]
     public async Task EvaluateAsync_WithThousandsOfMatches_BoundsPathPreview()
     {
-        var json = BuildScalarDocument(itemCount: 5_000);
+        var json = BuildScalarDocument(itemCount: 12_000);
         var service = new JsonPathEvaluatorService();
 
         var result = await service.EvaluateAsync(json, "$.items[*]");
 
         Assert.Null(result.Error);
-        Assert.Equal(5_000, result.MatchCount);
+        Assert.Equal(12_000, result.MatchCount);
         Assert.NotNull(result.FirstPathPreview);
         Assert.Equal("\"$.items[*]\"", result.FirstPathPreview);
         Assert.Contains(OutputTruncationMessage, result.AllPathsPreview, StringComparison.Ordinal);
-        Assert.True(result.AllPathsPreview.Length <= 50_000, $"All-paths preview length was {result.AllPathsPreview.Length} characters.");
+        Assert.True(result.AllPathsPreview.Length <= 155_000, $"All-paths preview length was {result.AllPathsPreview.Length} characters.");
     }
 
     private static string BuildLargePayloadDocument(int itemCount, int payloadCharacters)
