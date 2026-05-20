@@ -371,6 +371,12 @@ html, body {
     height: 36px;
 }
 
+.history-block-header .btn {
+    min-height: 28px;
+    padding: 2px 8px;
+    font-size: 11px;
+}
+
 .history-block-body {
     max-height: 252px;
     overflow-y: auto;
