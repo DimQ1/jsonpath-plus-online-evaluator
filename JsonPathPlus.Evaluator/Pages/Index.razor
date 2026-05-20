@@ -73,6 +73,9 @@
         (@"$.store.book[?(@.price > 10 && @.price < 40)].title", "Logical filter (&&, ||)"),
         (@"$.store.book[?(@.price != 45.00)].title", "Not-equals filter (!=)"),
         (@"$.store.book[(@.length-1)].title", "Computed index expression"),
+        (@"$.store.book[*][title,author]", "Field inclusion (select specific fields)"),
+        (@"$.store.book[?(@.price > 2)][!title,!price]", "Field exclusion (drop specific fields)"),
+        (@"$.store[book[?(@.price<20)][title,author], bicycle[color], name]", "Nested query (sub-paths per key)"),
     };
 
     // ===== State =====
