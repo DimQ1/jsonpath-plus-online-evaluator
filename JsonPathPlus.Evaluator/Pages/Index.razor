@@ -113,6 +113,13 @@
 
     private string resultDisplayText = "";
 
+    // ===== File Loading State =====
+    private bool isFileLoading;
+    private int fileLoadProgress;
+    private string? fileLoadError;
+    private CancellationTokenSource? fileLoadCts;
+    private int fileInputKey;
+
     // ===== History Model =====
     private sealed record HistoryEntry(
         string Id,
@@ -461,23 +468,185 @@
 
     private async Task OnFileSelected(InputFileChangeEventArgs e)
     {
+        // Cancel any in-progress file load
+        CancelFileLoad();
+
+        IBrowserFile? file = null;
         try
         {
-            var file = e.File;
+            file = e.File;
             if (file is null || file.Size == 0) return;
 
-            using var stream = file.OpenReadStream(maxAllowedSize: 1000L * 1024 * 1024);
-            using var reader = new StreamReader(stream);
-            _jsonInput = await reader.ReadToEndAsync();
+            isFileLoading = true;
+            fileLoadProgress = 0;
+            fileLoadError = null;
+            fileLoadCts = new CancellationTokenSource();
+            var ct = fileLoadCts.Token;
+
+            StateHasChanged();
+
+            // Read file in chunks with progress tracking and cancellation support.
+            var totalBytes = file.Size;
+            var buffer = new byte[65536];
+            using var ms = new MemoryStream();
+            using var stream = file.OpenReadStream(maxAllowedSize: 1000L * 1024 * 1024, ct);
+
+            int bytesRead;
+            long totalRead = 0;
+            while ((bytesRead = await stream.ReadAsync(buffer, 0, buffer.Length, ct)) > 0)
+            {
+                ct.ThrowIfCancellationRequested();
+                ms.Write(buffer, 0, bytesRead);
+                totalRead += bytesRead;
+
+                var progress = (int)(totalRead * 100 / totalBytes);
+                if (progress != fileLoadProgress)
+                {
+                    fileLoadProgress = progress;
+                    StateHasChanged();
+                }
+            }
+
+            ms.Position = 0;
+
+            // Pretty-print the JSON using streaming reader/writer — no DOM materialization.
+            try
+            {
+                using var formattedMs = new MemoryStream();
+                var reader = new Utf8JsonReader(ms.GetBuffer().AsSpan(0, (int)ms.Length));
+                var writer = new Utf8JsonWriter(formattedMs, new JsonWriterOptions { Indented = true });
+                WriteJsonElement(ref reader, writer);
+                writer.Flush();
+                formattedMs.Position = 0;
+                using var formattedReader = new StreamReader(formattedMs);
+                _jsonInput = await formattedReader.ReadToEndAsync(ct);
+            }
+            catch (JsonException)
+            {
+                // If the file isn't valid JSON, pass it as-is so the user can see the raw content
+                // and the evaluation step will surface the parse error.
+                ms.Position = 0;
+                using var reader = new StreamReader(ms);
+                _jsonInput = await reader.ReadToEndAsync(ct);
+            }
+
             await SetJsonEditorValueAsync(_jsonInput);
             jsonError = null;
+            fileLoadError = null;
             hasTyped = true;
+
+            isFileLoading = false;
+            fileLoadProgress = 100;
+            fileLoadCts.Dispose();
+            fileLoadCts = null;
+            fileInputKey++; // Force InputFile recreation so same file can be re-imported
             StateHasChanged();
             await RequestEvaluationAsync();
         }
+        catch (OperationCanceledException)
+        {
+            isFileLoading = false;
+            fileLoadError = null;
+            StateHasChanged();
+        }
         catch (Exception ex)
         {
-            jsonError = $"Failed to read file: {ex.Message}";
+            isFileLoading = false;
+            fileLoadError = $"Failed to read file: {ex.Message}";
+            if (file is not null)
+            {
+                jsonError = null;
+            }
+            StateHasChanged();
+        }
+        finally
+        {
+            fileLoadCts?.Dispose();
+            fileLoadCts = null;
+        }
+    }
+
+    private void CancelFileLoad()
+    {
+        if (fileLoadCts is not null)
+        {
+            fileLoadCts.Cancel();
+            fileLoadCts.Dispose();
+            fileLoadCts = null;
+        }
+
+        if (isFileLoading)
+        {
+            isFileLoading = false;
+            fileLoadProgress = 0;
+            fileLoadError = "File import cancelled.";
+        }
+    }
+
+    /// <summary>
+    /// Streaming JSON pretty-printer. Walks the token stream and writes indented output
+    /// without materializing a JsonNode DOM.
+    /// </summary>
+    private static void WriteJsonElement(ref Utf8JsonReader reader, Utf8JsonWriter writer)
+    {
+        reader.Read();
+        WriteJsonValue(ref reader, writer, 0);
+    }
+
+    private static void WriteJsonValue(ref Utf8JsonReader reader, Utf8JsonWriter writer, int depth)
+    {
+        switch (reader.TokenType)
+        {
+            case JsonTokenType.StartObject:
+                writer.WriteStartObject();
+                while (reader.Read() && reader.TokenType != JsonTokenType.EndObject)
+                {
+                    if (reader.TokenType != JsonTokenType.PropertyName)
+                        throw new JsonException("Expected property name.");
+                    var propertyName = reader.GetString()!;
+                    writer.WritePropertyName(propertyName);
+                    reader.Read();
+                    WriteJsonValue(ref reader, writer, depth + 1);
+                }
+                writer.WriteEndObject();
+                break;
+
+            case JsonTokenType.StartArray:
+                writer.WriteStartArray();
+                while (reader.Read() && reader.TokenType != JsonTokenType.EndArray)
+                {
+                    WriteJsonValue(ref reader, writer, depth + 1);
+                }
+                writer.WriteEndArray();
+                break;
+
+            case JsonTokenType.String:
+                writer.WriteStringValue(reader.GetString());
+                break;
+
+            case JsonTokenType.Number:
+                if (reader.TryGetInt64(out var i64))
+                    writer.WriteNumberValue(i64);
+                else if (reader.TryGetDecimal(out var dec))
+                    writer.WriteNumberValue(dec);
+                else
+                    writer.WriteRawValue(reader.ValueSpan, skipInputValidation: true);
+                break;
+
+            case JsonTokenType.True:
+                writer.WriteBooleanValue(true);
+                break;
+
+            case JsonTokenType.False:
+                writer.WriteBooleanValue(false);
+                break;
+
+            case JsonTokenType.Null:
+                writer.WriteNullValue();
+                break;
+
+            default:
+                throw new JsonException($"Unexpected token type: {reader.TokenType}");
         }
     }
 
@@ -957,6 +1126,8 @@
     public async ValueTask DisposeAsync()
     {
         debounceTimer?.Dispose();
+        fileLoadCts?.Cancel();
+        fileLoadCts?.Dispose();
 
         if (monacoInitialized)
         {
@@ -1066,19 +1237,52 @@
     <div class="panel document-panel">
         <div class="panel-header">
             <span>Document</span>
-            <InputFile OnChange="OnFileSelected" accept=".json" style="display:none" id="fileInput" />
-            <button class="btn" @onclick="OpenFilePicker" title="Import a .json file from disk">
-                <span>&#x1F4C2;</span> Import File
-            </button>
+            <InputFile @key="fileInputKey" OnChange="OnFileSelected" accept=".json" style="display:none" id="fileInput" />
+            @if (isFileLoading)
+            {
+                <button class="btn btn-cancel" @onclick="CancelFileLoad" title="Cancel file import">
+                    <span>&#x2716;</span> Cancel
+                </button>
+            }
+            else
+            {
+                <button class="btn" @onclick="OpenFilePicker" title="Import a .json file from disk">
+                    <span>&#x1F4C2;</span> Import File
+                </button>
+            }
         </div>
         <div class="panel-body">
-            <div class="editor-surface monaco-surface @(HasJsonError ? "error" : "")" @onclick="FocusJsonEditorAsync">
+            <div class="editor-surface monaco-surface @(HasJsonError || fileLoadError is not null ? "error" : "")" @onclick="FocusJsonEditorAsync">
                 <div class="monaco-host" @ref="jsonMonacoRef" aria-label="JSON document editor"></div>
             </div>
+            @if (isFileLoading)
+            {
+                <div class="file-load-overlay">
+                    <div class="file-load-progress-ring">
+                        <svg viewBox="0 0 36 36" class="file-load-ring">
+                            <path class="file-load-ring-bg"
+                                  d="M18 2.0845
+                                     a 15.9155 15.9155 0 0 1 0 31.831
+                                     a 15.9155 15.9155 0 0 1 0 -31.831" />
+                            <path class="file-load-ring-fg"
+                                  stroke-dasharray="@($"{fileLoadProgress}, 100")"
+                                  d="M18 2.0845
+                                     a 15.9155 15.9155 0 0 1 0 31.831
+                                     a 15.9155 15.9155 0 0 1 0 -31.831" />
+                        </svg>
+                        <span class="file-load-percent">@fileLoadProgress%</span>
+                    </div>
+                    <span class="file-load-label">Importing file&hellip;</span>
+                </div>
+            }
         </div>
         @if (HasJsonError && !string.IsNullOrEmpty(jsonError))
         {
             <div class="error-message">@jsonError</div>
+        }
+        @if (fileLoadError is not null && !isFileLoading)
+        {
+            <div class="error-message file-load-error">@fileLoadError</div>
         }
     </div>
 

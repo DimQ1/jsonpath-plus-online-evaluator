@@ -878,6 +878,79 @@ html, body {
     to   { opacity: 0; }
 }
 
+/* ===== File Load Progress Overlay ===== */
+.file-load-overlay {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 16px;
+    background: rgba(255, 255, 255, 0.92);
+    backdrop-filter: blur(4px);
+    border-radius: var(--radius);
+    z-index: 10;
+}
+
+.file-load-progress-ring {
+    position: relative;
+    width: 80px;
+    height: 80px;
+}
+
+.file-load-ring {
+    width: 80px;
+    height: 80px;
+    transform: rotate(-90deg);
+}
+
+.file-load-ring-bg {
+    fill: none;
+    stroke: var(--color-border);
+    stroke-width: 3;
+}
+
+.file-load-ring-fg {
+    fill: none;
+    stroke: var(--color-primary);
+    stroke-width: 3;
+    stroke-linecap: round;
+    transition: stroke-dasharray 0.2s ease;
+}
+
+.file-load-percent {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--color-primary);
+}
+
+.file-load-label {
+    font-size: var(--text-sm);
+    color: var(--color-text-secondary);
+    font-weight: 500;
+}
+
+.btn-cancel {
+    color: var(--color-error) !important;
+    border-color: var(--color-error) !important;
+}
+
+.btn-cancel:hover {
+    background: var(--color-error-bg) !important;
+}
+
+.file-load-error {
+    border-color: var(--color-error-border);
+    background: var(--color-error-bg);
+    color: var(--color-error);
+}
+
 /* ===== Blazor Error UI ===== */
 #blazor-error-ui {
     display: none;
