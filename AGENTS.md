@@ -40,9 +40,10 @@
 ## Deployment
 - **Trigger**: push to `main` that changes files under `JsonPathPlus.Evaluator/**`
 - **Workflow**: [.github/workflows/deploy.yml](.github/workflows/deploy.yml)
-  1. `dotnet publish -c Release -o publish`
-  2. Rewrite `<base href>` to `/jsonpath-plus-online-evaluator/`
-  3. Push `publish/wwwroot` to `gh-pages` branch via `peaceiris/actions-gh-pages@v4`
+  1. **Update versions**: bump the `<span class="version">vX.Y.Z</span>` (evaluator) and `<span class="version lib-version">lib vX.Y.Z</span>` (JsonPathPlus library) badges in `JsonPathPlus.Evaluator/Pages/Index.razor` to match the current release versions before deploying.
+  2. `dotnet publish -c Release -o publish`
+  3. Rewrite `<base href>` to `/jsonpath-plus-online-evaluator/`
+  4. Push `publish/wwwroot` to `gh-pages` branch via `peaceiris/actions-gh-pages@v4`
 - **Live URL**: `https://dimq1.github.io/jsonpath-plus-online-evaluator/`
 
 ## Known Pitfalls

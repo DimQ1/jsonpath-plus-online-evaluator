@@ -127,6 +127,11 @@ html, body {
     border-radius: 4px;
 }
 
+.evaluator-title .version.lib-version {
+    color: var(--color-text-muted);
+    background: var(--color-border);
+}
+
 .header-actions {
     display: flex;
     gap: 8px;
