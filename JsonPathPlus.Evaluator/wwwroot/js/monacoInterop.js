@@ -21,6 +21,11 @@
     var jsonChangeTimer = null;
     var pendingJsonNotification = false;
     var jsonChangeInProgress = false;
+    var stateStorageKey = null;
+    var persistStateTimer = null;
+    var pageHideHandler = null;
+    var beforeUnloadHandler = null;
+    var visibilityChangeHandler = null;
 
     function hideChangeAllOccurrencesMenuItem() {
         var targets = document.querySelectorAll('div, span, a, li');
@@ -289,6 +294,133 @@
         jsonChangeTimer = null;
     }
 
+    function clearPersistStateTimer() {
+        if (!persistStateTimer) {
+            return;
+        }
+
+        window.clearTimeout(persistStateTimer);
+        persistStateTimer = null;
+    }
+
+    function buildPersistedState() {
+        return JSON.stringify({
+            json: jsonModel ? jsonModel.getValue() : '',
+            path: pathInputElement ? pathInputElement.value || '' : ''
+        });
+    }
+
+    function persistCurrentState(storageKey) {
+        if (storageKey) {
+            stateStorageKey = storageKey;
+        }
+
+        if (!stateStorageKey) {
+            return;
+        }
+
+        try {
+            localStorage.setItem(stateStorageKey, buildPersistedState());
+        } catch (e) {
+            // Ignore quota and availability failures.
+        }
+    }
+
+    function schedulePersistCurrentState(storageKey) {
+        if (storageKey) {
+            stateStorageKey = storageKey;
+        }
+
+        if (!stateStorageKey) {
+            return;
+        }
+
+        clearPersistStateTimer();
+        persistStateTimer = window.setTimeout(function () {
+            persistCurrentState();
+        }, 150);
+    }
+
+    function tryReadPersistedState(storageKey) {
+        if (!storageKey) {
+            return null;
+        }
+
+        try {
+            var raw = localStorage.getItem(storageKey);
+            if (!raw) {
+                return null;
+            }
+
+            var parsed = JSON.parse(raw);
+            if (!parsed || typeof parsed !== 'object') {
+                return null;
+            }
+
+            var hasJson = Object.prototype.hasOwnProperty.call(parsed, 'json');
+            var hasPath = Object.prototype.hasOwnProperty.call(parsed, 'path');
+            if (!hasJson && !hasPath) {
+                return null;
+            }
+
+            return {
+                restored: true,
+                json: hasJson && parsed.json != null ? String(parsed.json) : '',
+                path: hasPath && parsed.path != null ? String(parsed.path) : ''
+            };
+        } catch (e) {
+            return null;
+        }
+    }
+
+    function ensureStatePersistenceLifecycle() {
+        if (pageHideHandler) {
+            return;
+        }
+
+        pageHideHandler = function () {
+            clearPersistStateTimer();
+            persistCurrentState();
+        };
+
+        beforeUnloadHandler = function () {
+            clearPersistStateTimer();
+            persistCurrentState();
+        };
+
+        visibilityChangeHandler = function () {
+            if (document.visibilityState !== 'hidden') {
+                return;
+            }
+
+            clearPersistStateTimer();
+            persistCurrentState();
+        };
+
+        window.addEventListener('pagehide', pageHideHandler);
+        window.addEventListener('beforeunload', beforeUnloadHandler);
+        document.addEventListener('visibilitychange', visibilityChangeHandler);
+    }
+
+    function disposeStatePersistenceLifecycle() {
+        clearPersistStateTimer();
+
+        if (pageHideHandler) {
+            window.removeEventListener('pagehide', pageHideHandler);
+            pageHideHandler = null;
+        }
+
+        if (beforeUnloadHandler) {
+            window.removeEventListener('beforeunload', beforeUnloadHandler);
+            beforeUnloadHandler = null;
+        }
+
+        if (visibilityChangeHandler) {
+            document.removeEventListener('visibilitychange', visibilityChangeHandler);
+            visibilityChangeHandler = null;
+        }
+    }
+
     function notifyJsonDocumentChanged() {
         if (!dotNetReference || jsonChangeInProgress) {
             return;
@@ -386,6 +518,7 @@
                 window.jsonPathWorkerClient.cancelActive();
             }
 
+            schedulePersistCurrentState();
             schedulePathInputNotification();
         };
 
@@ -394,6 +527,8 @@
                 return;
             }
 
+            clearPersistStateTimer();
+            persistCurrentState();
             clearPathInputTimer();
             notifyPathInputChanged();
         };
@@ -403,6 +538,8 @@
                 return;
             }
 
+            clearPersistStateTimer();
+            persistCurrentState();
             clearPathInputTimer();
             notifyPathInputChanged();
         };
@@ -706,10 +843,13 @@
     }
 
     window.jsonPathPlusMonaco = {
-        initialize: async function (pathElement, jsonElement, resultElement, reference, initialPath, initialJson, initialResult) {
+        initialize: async function (pathElement, jsonElement, resultElement, reference, storageKey, initialPath, initialJson, initialResult) {
             var monacoInstance = await ensureMonaco();
             dotNetReference = reference;
-            attachPathInput(pathElement, initialPath);
+            stateStorageKey = storageKey || stateStorageKey;
+            ensureStatePersistenceLifecycle();
+
+            attachPathInput(pathElement, initialPath || '');
 
             if (jsonEditor) {
                 jsonEditor.dispose();
@@ -751,6 +891,8 @@
                     return;
                 }
 
+                schedulePersistCurrentState();
+
                 if (jsonEditor
                     && typeof jsonEditor.hasTextFocus === 'function'
                     && jsonEditor.hasTextFocus()
@@ -767,6 +909,8 @@
 
                 scheduleJsonChangeNotification();
             });
+
+            schedulePersistCurrentState();
         },
         setPathValue: function (value) {
             if (!pathInputElement || pathInputElement.value === (value || '')) {
@@ -776,6 +920,7 @@
             suppressPathInputChange = true;
             pathInputElement.value = value || '';
             suppressPathInputChange = false;
+            schedulePersistCurrentState();
         },
         setJsonValue: function (value) {
             if (!jsonModel || jsonModel.getValue() === (value || '')) {
@@ -785,6 +930,7 @@
             suppressJsonChange = true;
             jsonModel.setValue(value || '');
             suppressJsonChange = false;
+            schedulePersistCurrentState();
         },
         setResultValue: function (value) {
             if (!resultModel || resultModel.getValue() === (value || '')) {
@@ -829,6 +975,13 @@
         getJsonValue: function () {
             return jsonModel ? jsonModel.getValue() : '';
         },
+        getPersistedState: function (storageKey) {
+            return tryReadPersistedState(storageKey);
+        },
+        persistCurrentState: function (storageKey) {
+            clearPersistStateTimer();
+            persistCurrentState(storageKey);
+        },
         evaluateCurrent: function (path, validateJson) {
             if (!jsonModel || !window.jsonPathWorkerClient || typeof window.jsonPathWorkerClient.evaluate !== 'function') {
                 return Promise.reject(new Error('Worker client is not available.'));
@@ -853,9 +1006,11 @@
             detachPathInput();
             disposeContextMenuFilter();
             disposeHoverEnhancer();
+            disposeStatePersistenceLifecycle();
             clearJsonChangeTimer();
             pendingJsonNotification = false;
             jsonChangeInProgress = false;
+            stateStorageKey = null;
 
             if (jsonEditor) {
                 jsonEditor.dispose();
@@ -865,6 +1020,8 @@
                 resultEditor.dispose();
                 resultEditor = null;
             }
+            jsonModel = null;
+            resultModel = null;
             dotNetReference = null;
         }
     };

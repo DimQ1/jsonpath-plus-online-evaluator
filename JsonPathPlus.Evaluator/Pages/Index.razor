@@ -110,6 +110,7 @@
     private ElementReference resultMonacoRef;
     private DotNetObjectReference<Index>? monacoDotNetReference;
     private bool monacoInitialized;
+    private bool shouldRestoreFromLocalStorage;
 
     private string resultDisplayText = "";
 
@@ -174,16 +175,8 @@
     // ===== Lifecycle =====
     protected override async Task OnInitializedAsync()
     {
-        // Priority: URL hash > localStorage > sample defaults
-        var restoredFromHash = await TryRestoreFromHashAsync();
-        if (!restoredFromHash)
-        {
-            var restoredFromStorage = await TryRestoreFromLocalStorageAsync();
-            if (restoredFromStorage)
-            {
-                hasTyped = true;
-            }
-        }
+        // Priority: URL hash > localStorage > sample defaults.
+        shouldRestoreFromLocalStorage = !await TryRestoreFromHashAsync();
 
         await LoadHistoryAsync();
         RefreshResultDisplayText();
@@ -194,6 +187,15 @@
         if (!firstRender)
         {
             return;
+        }
+
+        if (shouldRestoreFromLocalStorage)
+        {
+            var restoredFromStorage = await TryRestoreFromLocalStorageAsync();
+            if (restoredFromStorage)
+            {
+                hasTyped = true;
+            }
         }
 
         await InitializeMonacoEditorsAsync();
@@ -221,9 +223,11 @@
             jsonMonacoRef,
             resultMonacoRef,
             monacoDotNetReference,
+            LocalStorageStateKey,
             _pathInput,
             _jsonInput,
             resultDisplayText);
+
         monacoInitialized = true;
         await SetResultEditorValueAsync(resultDisplayText);
         await UpdateJsonErrorMarkerAsync();
@@ -300,41 +304,43 @@
     {
         try
         {
-            var currentJson = await JS.InvokeAsync<string>("jsonPathPlusMonaco.getJsonValue");
-            var state = System.Text.Json.JsonSerializer.Serialize(new
-            {
-                json = currentJson,
-                path = _pathInput
-            });
-            await JS.InvokeVoidAsync("jsonPathPlusMonaco.setLocalStorage", LocalStorageStateKey, state);
+            await JS.InvokeVoidAsync("jsonPathPlusMonaco.persistCurrentState", LocalStorageStateKey);
         }
-        catch { /* localStorage may be unavailable */ }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"SaveToLocalStorageAsync failed: {ex.Message}");
+        }
     }
 
     private async Task<bool> TryRestoreFromLocalStorageAsync()
     {
         try
         {
-            var state = await JS.InvokeAsync<string>("jsonPathPlusMonaco.getLocalStorage", LocalStorageStateKey);
-            if (string.IsNullOrEmpty(state))
+            var parsed = await JS.InvokeAsync<JsonElement>("jsonPathPlusMonaco.getPersistedState", LocalStorageStateKey);
+            if (parsed.ValueKind != JsonValueKind.Object)
+            {
                 return false;
-
-            var parsed = System.Text.Json.JsonSerializer.Deserialize<System.Text.Json.JsonElement>(state);
-            var json = parsed.GetProperty("json").GetString();
-            var path = parsed.GetProperty("path").GetString();
-
-            if (!string.IsNullOrEmpty(json))
-            {
-                _jsonInput = json;
             }
-            if (!string.IsNullOrEmpty(path))
+
+            var restoredAny = false;
+
+            if (parsed.TryGetProperty("json", out var jsonProperty) && jsonProperty.ValueKind != JsonValueKind.Null)
             {
-                _pathInput = path;
+                _jsonInput = jsonProperty.GetString() ?? string.Empty;
+                restoredAny = true;
             }
-            return !string.IsNullOrEmpty(json) && !string.IsNullOrEmpty(path);
+
+            if (parsed.TryGetProperty("path", out var pathProperty) && pathProperty.ValueKind != JsonValueKind.Null)
+            {
+                _pathInput = pathProperty.GetString() ?? string.Empty;
+                restoredAny = true;
+            }
+
+            return restoredAny;
         }
-        catch
+        catch (Exception ex)
         {
+            Console.Error.WriteLine($"TryRestoreFromLocalStorageAsync failed: {ex.Message}");
             return false;
         }
     }
@@ -1078,26 +1084,36 @@
             var parts = hash.Split('&');
             var jsonPart = "";
             var pathPart = "";
+            var hasJsonPart = false;
+            var hasPathPart = false;
 
             foreach (var part in parts)
             {
                 if (part.StartsWith("json="))
+                {
                     jsonPart = Uri.UnescapeDataString(part[5..]);
+                    hasJsonPart = true;
+                }
                 else if (part.StartsWith("path="))
+                {
                     pathPart = Uri.UnescapeDataString(part[5..]);
+                    hasPathPart = true;
+                }
             }
 
-            if (!string.IsNullOrEmpty(jsonPart))
+            if (hasJsonPart)
             {
                 _jsonInput = jsonPart;
                 hasTyped = true;
             }
-            if (!string.IsNullOrEmpty(pathPart))
+
+            if (hasPathPart)
             {
                 _pathInput = pathPart;
                 hasTyped = true;
             }
-            return true;
+
+            return hasJsonPart || hasPathPart;
         }
         catch
         {
