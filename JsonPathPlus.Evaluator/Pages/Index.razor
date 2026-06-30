@@ -76,12 +76,16 @@
         (@"$.store.book[*][title,author]", "Field inclusion (select specific fields)"),
         (@"$.store.book[?(@.price > 2)][!title,!price]", "Field exclusion (drop specific fields)"),
         (@"$.store[book[?(@.price<20)][title,author], bicycle[color], name]", "Nested query (sub-paths per key)"),
+        (@"$.store.schema()", "Schema of entire store object"),
+        (@"$.store.book[*].schema()", "Schema of array items (merged)"),
+        (@"$.store.name.schema()", "Schema of a single property"),
     };
 
     // ===== State =====
     private string _jsonInput = SampleJson;
     private string _pathInput = SamplePath;
     private bool showFirstOnly = true;
+    private bool showSchema;
     private bool showOutputPaths;
     private int matchCount;
     private string? firstMatchPreview;
@@ -237,6 +241,14 @@
     private void SetMode(bool firstOnly)
     {
         showFirstOnly = firstOnly;
+        showSchema = false;
+        RefreshResultDisplayText();
+    }
+
+    private void SetSchemaMode()
+    {
+        showSchema = true;
+        showFirstOnly = false;
         RefreshResultDisplayText();
     }
 
@@ -257,6 +269,7 @@
         _pathInput = SamplePath;
         await SetPathInputValueAsync(_pathInput);
         showFirstOnly = true;
+        showSchema = false;
         jsonError = null;
         pathError = null;
         hasTyped = false;
@@ -798,6 +811,13 @@
             return;
         }
 
+        // Schema mode: evaluate on the .NET side (not via JS worker)
+        if (showSchema)
+        {
+            await EvaluateSchemaOnDotNetAsync(requestId, persistResult);
+            return;
+        }
+
         if (!jsonChangedSinceLastEvaluation && !lastJsonWasValid)
         {
             result = new JsonPathWorkerEvaluationResult(
@@ -1034,11 +1054,76 @@
     private static bool IsWorkerCancellation(JSException exception)
         => exception.Message.Contains("EvaluationCanceled", StringComparison.Ordinal);
 
+    private async Task EvaluateSchemaOnDotNetAsync(long requestId, bool persistResult)
+    {
+        try
+        {
+            // Read JSON directly from Monaco editor
+            var currentJson = await JS.InvokeAsync<string>("jsonPathPlusMonaco.getJsonValue");
+
+            if (requestId != latestEvaluationRequestId)
+                return;
+
+            var service = new JsonPathEvaluatorService();
+            var evalResult = await service.EvaluateSchemaAsync(currentJson, _pathInput);
+
+            if (requestId != latestEvaluationRequestId)
+                return;
+
+            if (evalResult.Error is not null)
+            {
+                if (evalResult.Error.Contains("Invalid JSON", StringComparison.OrdinalIgnoreCase))
+                {
+                    jsonError = evalResult.Error;
+                    pathError = null;
+                }
+                else
+                {
+                    jsonError = null;
+                    pathError = evalResult.Error;
+                }
+
+                ClearEvaluationResultState();
+            }
+            else
+            {
+                jsonError = null;
+                pathError = null;
+                firstMatchPreview = evalResult.FirstMatchPreview;
+                allMatchesPreview = evalResult.AllMatchesPreview;
+                firstPathPreview = evalResult.FirstPathPreview;
+                allPathsPreview = evalResult.AllPathsPreview;
+                matchCount = evalResult.MatchCount;
+
+                if (persistResult)
+                {
+                    await SaveToLocalStorageAsync();
+                    await AddHistoryEntryAsync();
+                }
+            }
+
+            jsonChangedSinceLastEvaluation = true;
+            lastJsonWasValid = true;
+            lastJsonValidationError = null;
+            lastJsonValidationLine = null;
+            lastJsonValidationColumn = null;
+        }
+        catch (Exception ex)
+        {
+            pathError = $"Schema evaluation failed: {ex.Message}";
+            ClearEvaluationResultState();
+        }
+
+        RefreshResultDisplayText();
+        await UpdateJsonErrorMarkerAsync(null, null, null);
+        StateHasChanged();
+    }
+
     private string BuildResultsDisplayText()
     {
         if (isEvaluating)
         {
-            return ShowOutputPaths ? "Evaluating paths..." : "Evaluating results...";
+            return showSchema ? "Generating schema..." : ShowOutputPaths ? "Evaluating paths..." : "Evaluating results...";
         }
 
         if (HasPathError && !string.IsNullOrEmpty(pathError))
@@ -1056,6 +1141,11 @@
             }
 
             return "[]";
+        }
+
+        if (showSchema)
+        {
+            return firstMatchPreview ?? "No schema generated";
         }
 
         if (HasResults)
@@ -1166,8 +1256,8 @@
     <div class="evaluator-title">
         <span class="icon">&#x1F50D;</span>
         <span>JsonPathPlus Online Evaluator</span>
-        <span class="version">v1.2.1</span>
-        <span class="version lib-version">lib v1.6.4</span>
+        <span class="version">v1.3.0</span>
+        <span class="version lib-version">lib v1.7.0</span>
     </div>
     <div class="header-actions">
         <button class="btn @(showHistory ? "active" : "")" @onclick="ToggleHistory" title="Evaluation history">
@@ -1203,15 +1293,20 @@
            placeholder="e.g. $.store.book[*].title"
            spellcheck="false" />
     <div class="match-mode-toggle">
-        <button class="@(showFirstOnly ? "active" : "")"
+        <button class="@(showFirstOnly && !showSchema ? "active" : "")"
                 @onclick="() => SetMode(true)"
                 title="Show only the first match">
             First
         </button>
-        <button class="@(showFirstOnly ? "" : "active")"
+        <button class="@(!showFirstOnly && !showSchema ? "active" : "")"
                 @onclick="() => SetMode(false)"
                 title="Show all matches">
             All
+        </button>
+        <button class="schema-btn @(showSchema ? "active" : "")"
+                @onclick="SetSchemaMode"
+                title="Generate JSON Schema for the matched data">
+            Schema
         </button>
     </div>
 </div>
@@ -1306,7 +1401,7 @@
     @* Right: Evaluation Results *@
     <div class="panel results-panel">
         <div class="panel-header">
-            <span>@(ShowOutputPaths ? "Output Paths" : "Evaluation Results")</span>
+            <span>@(showSchema ? "Schema" : ShowOutputPaths ? "Output Paths" : "Evaluation Results")</span>
             <div class="panel-header-actions">
                 <label class="header-toggle" title="Show JSONPath locations instead of matched values">
                     <input type="checkbox" @bind="ShowOutputPaths" />

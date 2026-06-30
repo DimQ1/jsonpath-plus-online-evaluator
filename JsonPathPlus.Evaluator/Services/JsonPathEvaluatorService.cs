@@ -29,6 +29,47 @@ public class JsonPathEvaluatorService
     };
 
     /// <summary>
+    /// Generates a JSON Schema for the data at the specified path.
+    /// </summary>
+    public async Task<EvaluationResult> EvaluateSchemaAsync(string json, string? path)
+    {
+        if (string.IsNullOrWhiteSpace(json))
+            return CreateErrorResult("Please enter a JSON document.");
+
+        var trimmedPath = string.IsNullOrWhiteSpace(path) ? "$" : path.Trim();
+        var pathValidation = JsonPathValidator.Validate(trimmedPath);
+        if (!pathValidation.IsValid)
+        {
+            return CreateErrorResult($"Invalid JSONPath expression: {pathValidation.Error}");
+        }
+
+        try
+        {
+            using var stream = new MemoryStream(Encoding.UTF8.GetBytes(json));
+            var schema = await stream.ExtractJsonSchemaAsync(trimmedPath);
+
+            if (schema is null)
+                return CreateErrorResult("No schema could be generated for the selected path.", 0);
+
+            var schemaPreview = SerializeNodePreview(schema, MaxSinglePreviewBytes * 2, includeTruncationMessage: true, out _);
+            var pathPreview = JsonSerializer.Serialize(trimmedPath, PrettyJsonOptions);
+
+            return new EvaluationResult(
+                schemaPreview,
+                schemaPreview,
+                pathPreview,
+                $"[{pathPreview}]",
+                null,
+                1);
+        }
+        catch (Exception ex) when (ex.Message.Contains("JSON", StringComparison.OrdinalIgnoreCase)
+                                   || ex.Message.Contains("path", StringComparison.OrdinalIgnoreCase))
+        {
+            return CreateErrorResult($"Error: {ex.Message}");
+        }
+    }
+
+    /// <summary>
     /// Result of a JSONPath evaluation.
     /// </summary>
     public sealed record EvaluationResult(
