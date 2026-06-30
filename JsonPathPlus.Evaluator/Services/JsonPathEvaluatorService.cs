@@ -70,6 +70,102 @@ public class JsonPathEvaluatorService
     }
 
     /// <summary>
+    /// Evaluates a JSONPath expression and returns the FULL result (no truncation) for file download.
+    /// </summary>
+    public async Task<string> EvaluateFullForDownloadAsync(string json, string? path)
+    {
+        if (string.IsNullOrWhiteSpace(json))
+            return "";
+
+        var trimmedPath = string.IsNullOrWhiteSpace(path) ? "$" : path.Trim();
+
+        if (!JsonPathValidator.IsValid(trimmedPath))
+            return "";
+
+        try
+        {
+            using var stream = new MemoryStream(Encoding.UTF8.GetBytes(json));
+
+            var allMatches = new List<JsonNode?>();
+            await foreach (var match in stream.ExtractAllJsonMatchesAsync(trimmedPath))
+                allMatches.Add(match);
+
+            if (allMatches.Count == 0)
+                return "[]";
+
+            if (allMatches.Count == 1 && allMatches[0] is not null)
+            {
+                return allMatches[0]!.ToJsonString(PrettyJsonOptions);
+            }
+
+            // Build full JSON array
+            var array = new JsonArray();
+            foreach (var match in allMatches)
+                array.Add(match?.DeepClone());
+
+            return array.ToJsonString(PrettyJsonOptions);
+        }
+        catch
+        {
+            return "";
+        }
+    }
+
+    /// <summary>
+    /// Returns the full JSON Schema result (no truncation) for file download.
+    /// </summary>
+    public async Task<string> EvaluateSchemaFullForDownloadAsync(string json, string? path)
+    {
+        if (string.IsNullOrWhiteSpace(json))
+            return "";
+
+        var trimmedPath = string.IsNullOrWhiteSpace(path) ? "$" : path.Trim();
+
+        if (!JsonPathValidator.IsValid(trimmedPath))
+            return "";
+
+        try
+        {
+            using var stream = new MemoryStream(Encoding.UTF8.GetBytes(json));
+            var schema = await stream.ExtractJsonSchemaAsync(trimmedPath);
+            return schema?.ToJsonString(PrettyJsonOptions) ?? "";
+        }
+        catch
+        {
+            return "";
+        }
+    }
+
+    /// <summary>
+    /// Returns full JSONPath output paths (no truncation) for file download.
+    /// </summary>
+    public async Task<string> EvaluatePathsFullForDownloadAsync(string json, string? path)
+    {
+        if (string.IsNullOrWhiteSpace(json))
+            return "[]";
+
+        var trimmedPath = string.IsNullOrWhiteSpace(path) ? "$" : path.Trim();
+
+        if (!JsonPathValidator.IsValid(trimmedPath))
+            return "[]";
+
+        try
+        {
+            using var stream = new MemoryStream(Encoding.UTF8.GetBytes(json));
+
+            var allPaths = new JsonArray();
+            await foreach (var match in stream.ExtractAllJsonMatchesWithPathsAsync(trimmedPath))
+                allPaths.Add(JsonValue.Create(match.Path));
+
+            return allPaths.ToJsonString(PrettyJsonOptions);
+        }
+        catch
+        {
+            return "[]";
+        }
+    }
+
+    /// <summary>
     /// Result of a JSONPath evaluation.
     /// </summary>
     public sealed record EvaluationResult(

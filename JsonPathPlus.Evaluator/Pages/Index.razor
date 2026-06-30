@@ -1054,6 +1054,49 @@
     private static bool IsWorkerCancellation(JSException exception)
         => exception.Message.Contains("EvaluationCanceled", StringComparison.Ordinal);
 
+    // ===== Save To File =====
+    private async Task SaveResultsToFileAsync()
+    {
+        try
+        {
+            var currentJson = await JS.InvokeAsync<string>("jsonPathPlusMonaco.getJsonValue");
+            var service = new JsonPathEvaluatorService();
+
+            string fullResult;
+            string fileName;
+
+            if (showSchema)
+            {
+                fullResult = await service.EvaluateSchemaFullForDownloadAsync(currentJson, _pathInput);
+                fileName = "json-schema.json";
+            }
+            else if (ShowOutputPaths)
+            {
+                // For paths, evaluate with paths and serialize
+                fullResult = await service.EvaluatePathsFullForDownloadAsync(currentJson, _pathInput);
+                fileName = "json-paths.json";
+            }
+            else
+            {
+                fullResult = await service.EvaluateFullForDownloadAsync(currentJson, _pathInput);
+                fileName = showFirstOnly ? "json-result.json" : "json-results.json";
+            }
+
+            if (string.IsNullOrEmpty(fullResult))
+            {
+                ShowToast("Nothing to save.");
+                return;
+            }
+
+            await JS.InvokeVoidAsync("jsonPathPlusMonaco.downloadFile", fileName, fullResult);
+            ShowToast($"Saved as {fileName}");
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Save failed: {ex.Message}");
+        }
+    }
+
     private async Task EvaluateSchemaOnDotNetAsync(long requestId, bool persistResult)
     {
         try
@@ -1272,6 +1315,10 @@
         </button>
         <button class="btn" @onclick="ShareAsync" title="Copy shareable URL to clipboard">
             <span>&#x1F517;</span> Share
+        </button>
+        <button class="btn" @onclick="SaveResultsToFileAsync" title="Download full results as JSON file"
+                disabled="@(matchCount == 0 && string.IsNullOrEmpty(jsonError))">
+            <span>&#x1F4BE;</span> Save
         </button>
         <a class="btn" href="https://www.nuget.org/packages/JsonPathPlus" target="_blank" title="JsonPathPlus NuGet package">
             <span>&#x1F4E6;</span> NuGet
