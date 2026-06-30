@@ -1068,11 +1068,8 @@
 
             if (showSchema)
             {
-                var schemaOptions = schemaUse202012
-                    ? JsonPathSchemaGenerationOptions.FullInference
-                    : JsonPathSchemaGenerationOptions.Draft07Compatible;
-                fullResult = await service.EvaluateSchemaFullForDownloadAsync(currentJson, _pathInput, schemaOptions);
-                fileName = schemaUse202012 ? "json-schema-2020-12.json" : "json-schema-draft07.json";
+                fullResult = await service.EvaluateSchemaFullForDownloadAsync(currentJson, _pathInput);
+                fileName = "json-schema.json";
             }
             else if (ShowOutputPaths)
             {
@@ -1112,10 +1109,7 @@
                 return;
 
             var service = new JsonPathEvaluatorService();
-            var schemaOptions = schemaUse202012
-                ? JsonPathSchemaGenerationOptions.FullInference
-                : JsonPathSchemaGenerationOptions.Draft07Compatible;
-            var evalResult = await service.EvaluateSchemaAsync(currentJson, _pathInput, schemaOptions);
+            var evalResult = await service.EvaluateSchemaAsync(currentJson, _pathInput);
 
             if (requestId != latestEvaluationRequestId)
                 return;
@@ -1366,14 +1360,14 @@
         {
             <span class="schema-dialect-toggle">
                 <button class="@(schemaUse202012 ? "active" : "")"
-                        @onclick="() => { schemaUse202012 = true; _ = RequestEvaluationAsync(); }"
+                        @onclick="() => { schemaUse202012 = true; }"
                         title="JSON Schema 2020-12 — full inference (const, enum, format, constraints)">
                     2020-12
                 </button>
                 <button class="@(!schemaUse202012 ? "active" : "")"
-                        @onclick="() => { schemaUse202012 = false; _ = RequestEvaluationAsync(); }"
-                        title="JSON Schema draft-07 — minimal output (type + properties only)">
-                    draft-07
+                        @onclick="() => { schemaUse202012 = false; }"
+                        title="JSON Schema draft-07 — will be available in the next NuGet release">
+                    draft-07*
                 </button>
             </span>
         }

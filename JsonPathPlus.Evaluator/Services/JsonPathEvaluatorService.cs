@@ -30,15 +30,10 @@ public class JsonPathEvaluatorService
 
     /// <summary>
     /// Generates a JSON Schema for the data at the specified path.
-    /// Uses default FullInference (2020-12) options.
+    /// Uses FullInference (2020-12) by default — the dialect toggle is cosmetic
+    /// until the next NuGet release ships ExtractJsonSchemaAsync overloads.
     /// </summary>
-    public Task<EvaluationResult> EvaluateSchemaAsync(string json, string? path)
-        => EvaluateSchemaAsync(json, path, JsonPathSchemaGenerationOptions.FullInference);
-
-    /// <summary>
-    /// Generates a JSON Schema with the specified generation options.
-    /// </summary>
-    public async Task<EvaluationResult> EvaluateSchemaAsync(string json, string? path, JsonPathSchemaGenerationOptions schemaOptions)
+    public async Task<EvaluationResult> EvaluateSchemaAsync(string json, string? path)
     {
         if (string.IsNullOrWhiteSpace(json))
             return CreateErrorResult("Please enter a JSON document.");
@@ -53,7 +48,7 @@ public class JsonPathEvaluatorService
         try
         {
             using var stream = new MemoryStream(Encoding.UTF8.GetBytes(json));
-            var schema = await stream.ExtractJsonSchemaAsync(trimmedPath, schemaOptions);
+            var schema = await stream.ExtractJsonSchemaAsync(trimmedPath);
 
             if (schema is null)
                 return CreateErrorResult("No schema could be generated for the selected path.", 0);
@@ -122,14 +117,11 @@ public class JsonPathEvaluatorService
     /// Returns the full JSON Schema result (no truncation) for file download.
     /// Uses default FullInference (2020-12) options.
     /// </summary>
-    public Task<string> EvaluateSchemaFullForDownloadAsync(string json, string? path)
-        => EvaluateSchemaFullForDownloadAsync(json, path, JsonPathSchemaGenerationOptions.FullInference);
-
     /// <summary>
-    /// Returns the full JSON Schema result (no truncation) for file download
-    /// with the specified generation options.
+    /// Returns the full JSON Schema result (no truncation) for file download.
+    /// Uses FullInference (2020-12) by default.
     /// </summary>
-    public async Task<string> EvaluateSchemaFullForDownloadAsync(string json, string? path, JsonPathSchemaGenerationOptions schemaOptions)
+    public async Task<string> EvaluateSchemaFullForDownloadAsync(string json, string? path)
     {
         if (string.IsNullOrWhiteSpace(json))
             return "";
@@ -142,7 +134,7 @@ public class JsonPathEvaluatorService
         try
         {
             using var stream = new MemoryStream(Encoding.UTF8.GetBytes(json));
-            var schema = await stream.ExtractJsonSchemaAsync(trimmedPath, schemaOptions);
+            var schema = await stream.ExtractJsonSchemaAsync(trimmedPath);
             return schema?.ToJsonString(PrettyJsonOptions) ?? "";
         }
         catch
