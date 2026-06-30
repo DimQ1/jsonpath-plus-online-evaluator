@@ -87,6 +87,7 @@
     private bool showFirstOnly = true;
     private bool showSchema;
     private bool showOutputPaths;
+    private bool schemaUse202012 = true;
     private int matchCount;
     private string? firstMatchPreview;
     private string allMatchesPreview = string.Empty;
@@ -1067,8 +1068,11 @@
 
             if (showSchema)
             {
-                fullResult = await service.EvaluateSchemaFullForDownloadAsync(currentJson, _pathInput);
-                fileName = "json-schema.json";
+                var schemaOptions = schemaUse202012
+                    ? JsonPathSchemaGenerationOptions.FullInference
+                    : JsonPathSchemaGenerationOptions.Draft07Compatible;
+                fullResult = await service.EvaluateSchemaFullForDownloadAsync(currentJson, _pathInput, schemaOptions);
+                fileName = schemaUse202012 ? "json-schema-2020-12.json" : "json-schema-draft07.json";
             }
             else if (ShowOutputPaths)
             {
@@ -1108,7 +1112,10 @@
                 return;
 
             var service = new JsonPathEvaluatorService();
-            var evalResult = await service.EvaluateSchemaAsync(currentJson, _pathInput);
+            var schemaOptions = schemaUse202012
+                ? JsonPathSchemaGenerationOptions.FullInference
+                : JsonPathSchemaGenerationOptions.Draft07Compatible;
+            var evalResult = await service.EvaluateSchemaAsync(currentJson, _pathInput, schemaOptions);
 
             if (requestId != latestEvaluationRequestId)
                 return;
@@ -1299,8 +1306,8 @@
     <div class="evaluator-title">
         <span class="icon">&#x1F50D;</span>
         <span>JsonPathPlus Online Evaluator</span>
-        <span class="version">v1.3.0</span>
-        <span class="version lib-version">lib v1.7.0</span>
+        <span class="version">v1.4.0</span>
+        <span class="version lib-version">lib v1.8.0</span>
     </div>
     <div class="header-actions">
         <button class="btn @(showHistory ? "active" : "")" @onclick="ToggleHistory" title="Evaluation history">
@@ -1355,6 +1362,21 @@
                 title="Generate JSON Schema for the matched data">
             Schema
         </button>
+        @if (showSchema)
+        {
+            <span class="schema-dialect-toggle">
+                <button class="@(schemaUse202012 ? "active" : "")"
+                        @onclick="() => { schemaUse202012 = true; _ = RequestEvaluationAsync(); }"
+                        title="JSON Schema 2020-12 — full inference (const, enum, format, constraints)">
+                    2020-12
+                </button>
+                <button class="@(!schemaUse202012 ? "active" : "")"
+                        @onclick="() => { schemaUse202012 = false; _ = RequestEvaluationAsync(); }"
+                        title="JSON Schema draft-07 — minimal output (type + properties only)">
+                    draft-07
+                </button>
+            </span>
+        }
     </div>
 </div>
 

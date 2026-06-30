@@ -291,6 +291,40 @@ html, body {
     background: #f0f0f0;
 }
 
+.schema-dialect-toggle {
+    display: flex;
+    margin-left: 4px;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius);
+    overflow: hidden;
+}
+
+.schema-dialect-toggle button {
+    padding: 8px 10px;
+    border: none;
+    background: var(--color-surface);
+    font-size: 12px;
+    font-family: inherit;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    color: var(--color-text-secondary);
+    text-align: center;
+    white-space: nowrap;
+}
+
+.schema-dialect-toggle button:not(:last-child) {
+    border-right: 1px solid var(--color-border);
+}
+
+.schema-dialect-toggle button.active {
+    background: var(--color-primary);
+    color: white;
+}
+
+.schema-dialect-toggle button:hover:not(.active) {
+    background: #f0f0f0;
+}
+
 /* md: tablets and up */
 @media (min-width: 768px) {
     .path-input-bar {

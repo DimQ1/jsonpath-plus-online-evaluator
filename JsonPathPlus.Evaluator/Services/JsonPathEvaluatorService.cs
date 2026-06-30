@@ -30,8 +30,15 @@ public class JsonPathEvaluatorService
 
     /// <summary>
     /// Generates a JSON Schema for the data at the specified path.
+    /// Uses default FullInference (2020-12) options.
     /// </summary>
-    public async Task<EvaluationResult> EvaluateSchemaAsync(string json, string? path)
+    public Task<EvaluationResult> EvaluateSchemaAsync(string json, string? path)
+        => EvaluateSchemaAsync(json, path, JsonPathSchemaGenerationOptions.FullInference);
+
+    /// <summary>
+    /// Generates a JSON Schema with the specified generation options.
+    /// </summary>
+    public async Task<EvaluationResult> EvaluateSchemaAsync(string json, string? path, JsonPathSchemaGenerationOptions schemaOptions)
     {
         if (string.IsNullOrWhiteSpace(json))
             return CreateErrorResult("Please enter a JSON document.");
@@ -46,7 +53,7 @@ public class JsonPathEvaluatorService
         try
         {
             using var stream = new MemoryStream(Encoding.UTF8.GetBytes(json));
-            var schema = await stream.ExtractJsonSchemaAsync(trimmedPath);
+            var schema = await stream.ExtractJsonSchemaAsync(trimmedPath, schemaOptions);
 
             if (schema is null)
                 return CreateErrorResult("No schema could be generated for the selected path.", 0);
@@ -113,8 +120,16 @@ public class JsonPathEvaluatorService
 
     /// <summary>
     /// Returns the full JSON Schema result (no truncation) for file download.
+    /// Uses default FullInference (2020-12) options.
     /// </summary>
-    public async Task<string> EvaluateSchemaFullForDownloadAsync(string json, string? path)
+    public Task<string> EvaluateSchemaFullForDownloadAsync(string json, string? path)
+        => EvaluateSchemaFullForDownloadAsync(json, path, JsonPathSchemaGenerationOptions.FullInference);
+
+    /// <summary>
+    /// Returns the full JSON Schema result (no truncation) for file download
+    /// with the specified generation options.
+    /// </summary>
+    public async Task<string> EvaluateSchemaFullForDownloadAsync(string json, string? path, JsonPathSchemaGenerationOptions schemaOptions)
     {
         if (string.IsNullOrWhiteSpace(json))
             return "";
@@ -127,7 +142,7 @@ public class JsonPathEvaluatorService
         try
         {
             using var stream = new MemoryStream(Encoding.UTF8.GetBytes(json));
-            var schema = await stream.ExtractJsonSchemaAsync(trimmedPath);
+            var schema = await stream.ExtractJsonSchemaAsync(trimmedPath, schemaOptions);
             return schema?.ToJsonString(PrettyJsonOptions) ?? "";
         }
         catch
