@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>JsonPathPlus Online Evaluator</title>
+    <base href="/jsonpath-plus-online-evaluator/" />
+    <link rel="stylesheet" href="css/app.css" />
+    <link rel="icon" type="image/png" href="favicon.png" />
+</head>
+
+<body>
+    <div id="app">
+        <div class="loading-container">
+            <div class="loading-spinner"></div>
+            <div class="loading-text">Loading JsonPathPlus Evaluator...</div>
+        </div>
+    </div>
+
+    <div id="blazor-error-ui">
+        An unhandled error has occurred.
+        <a href="" class="reload">Reload</a>
+        <a class="dismiss">&#x2715;</a>
+    </div>
+    <script>
+        window.jsonPathPlus = {
+            focusElement: function (element) {
+                if (element && typeof element.focus === 'function') {
+                    element.focus();
+                }
+            },
+            getCaretLine: function (element) {
+                if (!element || typeof element.selectionStart !== 'number') {
+                    return 1;
+                }
+
+                var value = element.value || '';
+                var caret = element.selectionStart;
+                var line = 1;
+
+                for (var i = 0; i < caret && i < value.length; i++) {
+                    if (value.charCodeAt(i) === 10) {
+                        line++;
+                    }
+                }
+
+                return line;
+            },
+            insertTab: function (element) {
+                if (!element || typeof element.selectionStart !== 'number' || typeof element.selectionEnd !== 'number') {
+                    return;
+                }
+
+                var start = element.selectionStart;
+                var end = element.selectionEnd;
+                var value = element.value || '';
+                var tabText = '  ';
+                element.value = value.substring(0, start) + tabText + value.substring(end);
+                var caret = start + tabText.length;
+                element.selectionStart = caret;
+                element.selectionEnd = caret;
+                element.dispatchEvent(new Event('input', { bubbles: true }));
+            },
+            getScrollInfo: function (element) {
+                if (!element) {
+                    return { scrollTop: 0, clientHeight: 0 };
+                }
+
+                return {
+                    scrollTop: element.scrollTop || 0,
+                    clientHeight: element.clientHeight || 0
+                };
+            },
+            syncScroll: function (source, target) {
+                if (!source || !target) {
+                    return;
+                }
+
+                target.scrollTop = source.scrollTop;
+                target.scrollLeft = source.scrollLeft;
+            },
+            scrollToLine: function (editorElement, targetLine, lineHeightPx) {
+                if (!editorElement) {
+                    return;
+                }
+
+                var styles = window.getComputedStyle(editorElement);
+                var visibleHeight = editorElement.clientHeight;
+                var paddingTop = Math.max(
+                    parseFloat(styles.paddingTop || '0'),
+                    Math.max(0, visibleHeight / 2 - lineHeightPx / 2));
+                var top = paddingTop + ((targetLine - 1) * lineHeightPx);
+                var scrollTarget = top - visibleHeight / 2 + lineHeightPx / 2;
+                editorElement.scrollTop = Math.max(0, scrollTarget);
+            }
+        };
+    </script>
+    <script src="https://cdn.jsdelivr.net/npm/monaco-editor@0.55.1/min/vs/loader.js"></script>
+    <script src="js/jsonPathEvaluationWorkerClient.js"></script>
+    <script src="js/monacoInterop.js"></script>
+    <script src="_framework/blazor.webassembly.js"></script>
+</body>
+
+</html>
