@@ -10,7 +10,7 @@ namespace JsonPathPlus.Evaluator.Workers;
 internal static partial class JsonPathEvaluationWorkerExports
 {
     [JSExport]
-    internal static async Task<string> EvaluateAsync(string json, string? path, bool validateJson)
+    internal static async Task<string> EvaluateAsync(byte[] json, string? path, bool validateJson)
     {
         var evaluator = new JsonPathEvaluatorService();
         var result = await evaluator.EvaluateAsync(json, path, validateJson);

@@ -120,7 +120,7 @@
     }
 
     window.jsonPathWorkerClient = {
-        evaluate: async function (json, path, validateJson) {
+        evaluate: async function (jsonBytes, path, validateJson) {
             var state = ensureWorkerState();
             await state.readyPromise;
 
@@ -144,10 +144,10 @@
                 state.worker.postMessage({
                     command: 'evaluate',
                     requestId: requestId,
-                    json: json,
+                    bytes: jsonBytes,
                     path: path,
                     validateJson: validateJson
-                });
+                }, [jsonBytes.buffer]);
             });
         },
         cancelActive: function () {

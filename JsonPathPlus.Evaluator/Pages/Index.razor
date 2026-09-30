@@ -126,6 +126,10 @@
     private CancellationTokenSource? fileLoadCts;
     private int fileInputKey;
 
+    // ===== Large File Mode =====
+    private bool isLargeFileLoaded;
+    private const long LargeFileThresholdBytes = 10L * 1024 * 1024;
+
     // ===== History Model =====
     private sealed record HistoryEntry(
         string Id,
@@ -265,6 +269,12 @@
 
     private async Task ResetAsync()
     {
+        if (isLargeFileLoaded)
+        {
+            await JS.InvokeVoidAsync("jsonPathPlusMonaco.restoreJsonEditorOptions");
+            isLargeFileLoaded = false;
+        }
+
         _jsonInput = SampleJson;
         await SetJsonEditorValueAsync(_jsonInput);
         _pathInput = SamplePath;
@@ -468,6 +478,12 @@
 
     private async Task ShareAsync()
     {
+        if (isLargeFileLoaded)
+        {
+            ShowToast("Large documents cannot be shared via URL.");
+            return;
+        }
+
         try
         {
             // Read JSON directly from the Monaco model — no stale copy in .NET.
@@ -496,6 +512,14 @@
         {
             file = e.File;
             if (file is null || file.Size == 0) return;
+
+            // Large files are read directly on the JS side (file.text()) and placed into the
+            // Monaco model — no .NET marshaling, no pretty-print double buffer.
+            if (file.Size > LargeFileThresholdBytes)
+            {
+                await LoadLargeFileAsync();
+                return;
+            }
 
             isFileLoading = true;
             fileLoadProgress = 0;
@@ -600,6 +624,49 @@
             isFileLoading = false;
             fileLoadProgress = 0;
             fileLoadError = "File import cancelled.";
+        }
+    }
+
+    private async Task LoadLargeFileAsync()
+    {
+        if (isLargeFileLoaded)
+        {
+            await JS.InvokeVoidAsync("jsonPathPlusMonaco.restoreJsonEditorOptions");
+            isLargeFileLoaded = false;
+        }
+
+        isFileLoading = true;
+        fileLoadProgress = 0;
+        fileLoadError = null;
+        StateHasChanged();
+
+        try
+        {
+            var result = await JS.InvokeAsync<JsonElement>("jsonPathPlusMonaco.loadLargeJsonFile");
+
+            long length = 0;
+            if (result.TryGetProperty("length", out var lenElement) && lenElement.TryGetInt64(out var lenValue))
+            {
+                length = lenValue;
+            }
+
+            _jsonInput = length > 0 ? $"(imported {length / (1024 * 1024)} MB)" : "(imported)";
+            isLargeFileLoaded = true;
+            jsonError = null;
+            fileLoadError = null;
+            hasTyped = true;
+            jsonChangedSinceLastEvaluation = true;
+
+            isFileLoading = false;
+            fileInputKey++;
+            StateHasChanged();
+            await RequestEvaluationAsync();
+        }
+        catch (Exception ex)
+        {
+            isFileLoading = false;
+            fileLoadError = $"Failed to read file: {ex.Message}";
+            StateHasChanged();
         }
     }
 
@@ -1301,7 +1368,7 @@
         <span class="icon">&#x1F50D;</span>
         <span>JsonPathPlus Online Evaluator</span>
         <span class="version">v1.4.0</span>
-        <span class="version lib-version">lib v1.8.0</span>
+        <span class="version lib-version">lib v1.8.1</span>
     </div>
     <div class="header-actions">
         <button class="btn @(showHistory ? "active" : "")" @onclick="ToggleHistory" title="Evaluation history">

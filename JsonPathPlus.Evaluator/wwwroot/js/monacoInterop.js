@@ -14,6 +14,7 @@
     var resultEditor = null;
     var jsonModel = null;
     var resultModel = null;
+    var largeFileLoaded = false;
     var dotNetReference = null;
     var suppressJsonChange = false;
     var suppressPathInputChange = false;
@@ -304,10 +305,11 @@
     }
 
     function buildPersistedState() {
-        return JSON.stringify({
-            json: jsonModel ? jsonModel.getValue() : '',
+        var state = {
+            json: largeFileLoaded || !jsonModel ? '' : jsonModel.getValue(),
             path: pathInputElement ? pathInputElement.value || '' : ''
-        });
+        };
+        return JSON.stringify(state);
     }
 
     function persistCurrentState(storageKey) {
@@ -932,6 +934,58 @@
             suppressJsonChange = false;
             schedulePersistCurrentState();
         },
+        loadLargeJsonFile: async function () {
+            var fileInput = document.getElementById('fileInput');
+            if (!fileInput || !fileInput.files || !fileInput.files.length) {
+                throw new Error('No file selected.');
+            }
+
+            var text = await fileInput.files[0].text();
+
+            if (!jsonModel) {
+                throw new Error('Editor is not initialized.');
+            }
+
+            suppressJsonChange = true;
+            jsonModel.setValue(text);
+            suppressJsonChange = false;
+
+            if (jsonEditor && typeof jsonEditor.updateOptions === 'function') {
+                jsonEditor.updateOptions({
+                    wordWrap: 'off',
+                    folding: false,
+                    hover: { enabled: false },
+                    renderLineHighlight: 'none',
+                    guides: { indentation: false, highlightActiveIndentation: false, bracketPairs: false },
+                    occurrencesHighlight: 'off',
+                    selectionHighlight: false,
+                    matchBrackets: 'never',
+                    smoothScrolling: false,
+                    cursorBlinking: 'solid'
+                });
+            }
+
+            largeFileLoaded = true;
+            return { length: text.length };
+        },
+        restoreJsonEditorOptions: function () {
+            largeFileLoaded = false;
+
+            if (jsonEditor && typeof jsonEditor.updateOptions === 'function') {
+                jsonEditor.updateOptions({
+                    wordWrap: 'on',
+                    folding: true,
+                    hover: { enabled: true, sticky: true },
+                    renderLineHighlight: 'line',
+                    guides: { indentation: true, highlightActiveIndentation: true, bracketPairs: false },
+                    occurrencesHighlight: 'off',
+                    selectionHighlight: false,
+                    matchBrackets: 'always',
+                    smoothScrolling: true,
+                    cursorBlinking: 'blink'
+                });
+            }
+        },
         setResultValue: function (value) {
             if (!resultModel || resultModel.getValue() === (value || '')) {
                 return;
@@ -987,8 +1041,8 @@
                 return Promise.reject(new Error('Worker client is not available.'));
             }
 
-            var json = jsonModel.getValue();
-            return window.jsonPathWorkerClient.evaluate(json, path, validateJson);
+            var jsonBytes = new TextEncoder().encode(jsonModel.getValue());
+            return window.jsonPathWorkerClient.evaluate(jsonBytes, path, validateJson);
         },
         setLocalStorage: function (key, value) {
             try {

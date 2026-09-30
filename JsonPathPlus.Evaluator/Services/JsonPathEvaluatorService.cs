@@ -193,18 +193,24 @@ public class JsonPathEvaluatorService
         if (string.IsNullOrWhiteSpace(json))
             return CreateErrorResult("Please enter a JSON document.");
 
+        // Encode once; delegate to the byte-based path.
+        return await EvaluateAsync(Encoding.UTF8.GetBytes(json), path, validateJson);
+    }
+
+    /// <summary>
+    /// Evaluates a JSONPath expression against UTF-8 JSON bytes.
+    /// </summary>
+    public async Task<EvaluationResult> EvaluateAsync(byte[] jsonBytes, string? path, bool validateJson = true)
+    {
+        if (jsonBytes is null || jsonBytes.Length == 0)
+            return CreateErrorResult("Please enter a JSON document.");
+
         if (validateJson)
         {
-            // Validate JSON syntax first
-            try
+            // Stream-validate without materializing a JsonNode DOM.
+            if (!TryValidateJson(jsonBytes, out var line, out var column, out var validationMessage))
             {
-                JsonNode.Parse(json);
-            }
-            catch (JsonException ex)
-            {
-                var line = ex.LineNumber.HasValue ? (int)ex.LineNumber.Value + 1 : (int?)null;
-                var column = ex.BytePositionInLine.HasValue ? (int)ex.BytePositionInLine.Value + 1 : (int?)null;
-                var cleanMessage = BuildJsonErrorMessage(ex.Message);
+                var cleanMessage = BuildJsonErrorMessage(validationMessage);
                 var position = line.HasValue && column.HasValue
                     ? $" at line {line.Value}, column {column.Value}"
                     : string.Empty;
@@ -232,7 +238,7 @@ public class JsonPathEvaluatorService
         // Use the public Stream extension API from JsonPathPlus
         try
         {
-            using var stream = new MemoryStream(Encoding.UTF8.GetBytes(json));
+            using var stream = new MemoryStream(jsonBytes, writable: false);
 
             var previewBuilder = new EvaluationPreviewBuilder(trimmedPath);
             await foreach (var match in stream.ExtractAllJsonMatchesAsync(trimmedPath))
@@ -294,6 +300,55 @@ public class JsonPathEvaluatorService
         }
 
         return message;
+    }
+
+    /// <summary>
+    /// Validates a UTF-8 JSON document in a single streaming pass without materializing
+    /// a <see cref="JsonNode"/> DOM. Accepts exactly one root value with no trailing content.
+    /// </summary>
+    private static bool TryValidateJson(ReadOnlySpan<byte> bytes, out int? line, out int? column, out string message)
+    {
+        line = null;
+        column = null;
+
+        var reader = new Utf8JsonReader(bytes, isFinalBlock: true, state: default);
+        try
+        {
+            if (!reader.Read())
+            {
+                message = "The document is empty.";
+                return false;
+            }
+
+            // Skip() validates the full subtree of a root container in one pass.
+            if (reader.TokenType is JsonTokenType.StartObject or JsonTokenType.StartArray)
+            {
+                reader.Skip();
+            }
+
+            // A well-formed document contains exactly one root value.
+            if (reader.Read())
+            {
+                message = "The document contains additional content after the root value.";
+                return false;
+            }
+
+            message = string.Empty;
+            return true;
+        }
+        catch (JsonException ex)
+        {
+            line = ex.LineNumber.HasValue ? (int)ex.LineNumber.Value + 1 : null;
+            column = ex.BytePositionInLine.HasValue ? (int)ex.BytePositionInLine.Value + 1 : null;
+            message = ex.Message;
+            return false;
+        }
+        catch (InvalidOperationException ex) when (ex.Message.Contains("depth", StringComparison.OrdinalIgnoreCase))
+        {
+            // Max depth exceeded — treat as invalid input rather than crashing the worker.
+            message = ex.Message;
+            return false;
+        }
     }
 
     private static string SerializeNodePreview(JsonNode? node, int maxBytes, bool includeTruncationMessage, out bool wasTruncated)

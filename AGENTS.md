@@ -4,7 +4,7 @@
 - Interactive Blazor WebAssembly JSONPath evaluator, inspired by [jsonpath.com](https://jsonpath.com/).
 - Target framework: net10.0.
 - Live site: [dimq1.github.io/jsonpath-plus-online-evaluator](https://dimq1.github.io/jsonpath-plus-online-evaluator/)
-- Consumes [JsonPathPlus](https://www.nuget.org/packages/JsonPathPlus) v1.2.0 for JSON path evaluation.
+- Consumes [JsonPathPlus](https://www.nuget.org/packages/JsonPathPlus) v1.8.1 for JSON path evaluation.
 - Sibling workspace: JsonPathPlus library at `../JsonPathPlus`.
 
 ## Start Here

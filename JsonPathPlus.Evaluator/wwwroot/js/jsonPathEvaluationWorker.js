@@ -33,7 +33,7 @@ self.addEventListener('message', async event => {
     try {
         const assemblyExports = await assemblyExportsPromise;
         const result = await assemblyExports.JsonPathPlus.Evaluator.Workers.JsonPathEvaluationWorkerExports.EvaluateAsync(
-            request.json,
+            request.bytes,
             request.path ?? null,
             !!request.validateJson);
 
